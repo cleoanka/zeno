@@ -27,10 +27,20 @@ fn json(out: &Output) -> serde_json::Value {
 }
 
 /// Write a Bell-pair circuit into the cargo tempdir and return its path.
+///
+/// Each call gets a unique file: tests run in parallel, and a shared path
+/// would let one test truncate the file while another test's child process
+/// is reading it (observed as a flake on 2-core CI runners).
 fn bell_qasm() -> PathBuf {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     std::fs::create_dir_all(&dir).expect("tempdir");
-    let path = dir.join("bell.qasm");
+    let path = dir.join(format!(
+        "bell_{}_{}.qasm",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::write(
         &path,
         "OPENQASM 2.0;\n\
@@ -41,7 +51,7 @@ fn bell_qasm() -> PathBuf {
          cx q[0],q[1];\n\
          measure q -> c;\n",
     )
-    .expect("write bell.qasm");
+    .expect("write bell qasm");
     path
 }
 
