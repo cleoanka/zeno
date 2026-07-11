@@ -1,7 +1,9 @@
 //! `zeno` command-line interface.
 //!
-//! Four subcommands over the library in `src/lib.rs`:
+//! Five subcommands over the library in `src/lib.rs`:
 //!
+//! - `demo`    — built-in circuits (no files needed): friendly intro, the
+//!   QASM source, and a run. The zero-setup first-run experience.
 //! - `run`     — parse, compile and run an OpenQASM 2.0 file; histogram or JSON.
 //! - `info`    — machine capacity: RAM, budget, max qubits per precision.
 //! - `bench`   — seeded random-circuit throughput sweep (amp-updates/s).
@@ -28,7 +30,10 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
     version,
     about = "Apple Silicon-native quantum circuit simulator, compiler and runner",
     after_help = "Examples:\n  \
+        zeno demo                     (start here: no files needed)\n  \
+        zeno demo --list\n  \
         zeno run bell.qasm --shots 4096\n  \
+        zeno run bell.qasm --noise bit_flip=0.01\n  \
         zeno run qft.qasm --statevector --seed 7\n  \
         zeno info\n  \
         zeno bench --qubits 20,24 --compare-fusion\n  \
@@ -41,6 +46,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Run a built-in example circuit — no files needed (start here)
+    Demo(DemoArgs),
     /// Run an OpenQASM 2.0 circuit and print measurement counts
     Run(RunArgs),
     /// Show machine capacity (RAM, budget, max qubits by precision)
@@ -86,12 +93,36 @@ struct RunArgs {
     /// Also print the final state vector (needs a non-dynamic circuit)
     #[arg(long)]
     statevector: bool,
+    /// Noise model: key=value pairs, inline JSON, or a JSON file (e.g. --noise bit_flip=0.01)
+    #[arg(long, value_name = "SPEC")]
+    noise: Option<String>,
     /// Machine-readable JSON output
     #[arg(long)]
     json: bool,
     /// Histogram only: no header, summary or seed line
     #[arg(long)]
     quiet: bool,
+}
+
+#[derive(clap::Args)]
+struct DemoArgs {
+    /// Which demo to run: bell, ghz, qft, grover, teleport, noisy
+    name: Option<String>,
+    /// List the available demos and exit
+    #[arg(long)]
+    list: bool,
+    /// Number of measurement shots
+    #[arg(long, default_value_t = 1000)]
+    shots: u64,
+    /// RNG seed (decimal or 0x-hex); omit for a random seed
+    #[arg(long, value_parser = parse_seed)]
+    seed: Option<u64>,
+    /// Noise model: key=value pairs, inline JSON, or a JSON file (e.g. --noise bit_flip=0.01)
+    #[arg(long, value_name = "SPEC")]
+    noise: Option<String>,
+    /// Machine-readable JSON output
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Args)]
@@ -187,6 +218,7 @@ impl BackendArg {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.cmd {
+        Cmd::Demo(a) => cmd_demo(&a),
         Cmd::Run(a) => cmd_run(&a),
         Cmd::Info { json } => cmd_info(json),
         Cmd::Bench(a) => cmd_bench(&a),
@@ -278,6 +310,55 @@ fn parse_seed(s: &str) -> Result<u64, String> {
         None => t.parse(),
     };
     parsed.map_err(|_| format!("invalid seed '{s}' (decimal or 0x-hex u64)"))
+}
+
+/// Valid `--noise` key=value keys, mirroring [`zeno::NoiseModel`]'s fields.
+const NOISE_KEYS: [&str; 7] = [
+    "depolarizing_1q",
+    "depolarizing_2q",
+    "bit_flip",
+    "phase_flip",
+    "amplitude_damping",
+    "readout_flip_0to1",
+    "readout_flip_1to0",
+];
+
+/// `--noise SPEC` → validated model. Three forms:
+/// inline JSON when the trimmed spec starts with `{`, comma-separated
+/// `key=value` pairs when it contains `=`, otherwise a JSON file path.
+fn parse_noise_spec(spec: &str) -> Result<zeno::NoiseModel, zeno::Error> {
+    let t = spec.trim();
+    if t.starts_with('{') {
+        return zeno::NoiseModel::from_json(t);
+    }
+    if t.contains('=') {
+        let mut fields = serde_json::Map::new();
+        for pair in t.split(',') {
+            let (key, value) = pair.split_once('=').ok_or_else(|| {
+                zeno::Error::Noise(format!(
+                    "expected key=value, got '{}' (e.g. bit_flip=0.01)",
+                    pair.trim()
+                ))
+            })?;
+            let (key, value) = (key.trim(), value.trim());
+            if !NOISE_KEYS.contains(&key) {
+                return Err(zeno::Error::Noise(format!(
+                    "unknown field '{key}' (valid keys: {})",
+                    NOISE_KEYS.join(", ")
+                )));
+            }
+            let v: f64 = value
+                .parse()
+                .ok()
+                .filter(|v: &f64| v.is_finite())
+                .ok_or_else(|| zeno::Error::Noise(format!("{key} = '{value}' is not a number")))?;
+            fields.insert(key.to_string(), serde_json::json!(v));
+        }
+        return zeno::NoiseModel::from_json(&serde_json::Value::Object(fields).to_string());
+    }
+    let text = std::fs::read_to_string(t)
+        .map_err(|e| zeno::Error::Noise(format!("cannot read noise file '{t}': {e}")))?;
+    zeno::NoiseModel::from_json(&text)
 }
 
 fn parse_fraction(s: &str) -> Result<f64, String> {
@@ -402,6 +483,7 @@ fn print_table(headers: &[&str], rows: &[Vec<String>], right: &[bool], sty: &Sty
 // ---------------------------------------------------------------------------
 
 fn cmd_run(a: &RunArgs) -> Result<(), zeno::Error> {
+    let noise = a.noise.as_deref().map(parse_noise_spec).transpose()?;
     let program = parse_qasm(&a.file)?;
     let n_qubits = program.n_qubits();
     // In human mode only small states are printed, so skip the copy above 8
@@ -417,20 +499,21 @@ fn cmd_run(a: &RunArgs) -> Result<(), zeno::Error> {
         mem_limit: a.mem_limit,
         want_statevector: want_sv,
         threads: a.threads,
+        noise: noise.clone(),
     };
     let r = zeno::run_program(&program, &opts)?;
     if a.json {
-        print_run_json(a, &r);
+        print_run_json(a, &r, noise.as_ref());
     } else {
         print_run_human(a, &r);
     }
     Ok(())
 }
 
-fn print_run_json(a: &RunArgs, r: &RunResult) {
-    let mut obj = serde_json::json!({
+/// The JSON fields shared by `run` and `demo` output.
+fn run_json_base(r: &RunResult) -> serde_json::Value {
+    serde_json::json!({
         "schema_version": 1,
-        "file": a.file.display().to_string(),
         "n_qubits": r.n_qubits,
         "shots": r.shots,
         "seed": r.seed,
@@ -441,7 +524,15 @@ fn print_run_json(a: &RunArgs, r: &RunResult) {
         "stats": r.stats,
         "counts": r.counts,
         "notices": r.notices,
-    });
+    })
+}
+
+fn print_run_json(a: &RunArgs, r: &RunResult, noise: Option<&zeno::NoiseModel>) {
+    let mut obj = run_json_base(r);
+    obj["file"] = serde_json::json!(a.file.display().to_string());
+    if let Some(m) = noise {
+        obj["noise"] = serde_json::to_value(m).expect("noise model serializes");
+    }
     if let Some(sv) = &r.statevector {
         obj["statevector"] = serde_json::Value::Array(
             sv.iter()
@@ -577,6 +668,310 @@ fn print_statevector_human(r: &RunResult, sty: &Style) {
             println!();
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// zeno demo
+// ---------------------------------------------------------------------------
+
+/// A built-in, zero-file demo circuit. The QASM source is the single source
+/// of truth: it is printed verbatim and then parsed and run as-is, so what
+/// the user sees is exactly what executes.
+struct Demo {
+    name: &'static str,
+    one_liner: &'static str,
+    /// Friendly 3-6 line introduction, printed before the source.
+    intro: &'static [&'static str],
+    qasm: &'static str,
+    /// Built-in noise model as the JSON the `--noise` flag would take
+    /// (printed so users learn the real flag). `None` = ideal run.
+    noise_json: Option<&'static str>,
+    try_next: &'static str,
+}
+
+const NOISY_DEMO_JSON: &str =
+    r#"{"depolarizing_2q": 0.05, "readout_flip_0to1": 0.02, "readout_flip_1to0": 0.02}"#;
+
+const DEMOS: &[Demo] = &[
+    Demo {
+        name: "bell",
+        one_liner: "two entangled qubits, the smallest interesting circuit",
+        intro: &[
+            "A qubit is a quantum bit: between preparation and measurement it can",
+            "be 0 and 1 at once (superposition). Here the h gate puts qubit 0 into",
+            "an equal superposition, then cx ties qubit 1 to it, so the pair always",
+            "agrees when measured (entanglement). The histogram below should show",
+            "only 00 and 11, each near 50% — never 01 or 10.",
+        ],
+        qasm: "OPENQASM 2.0;\n\
+               include \"qelib1.inc\";\n\
+               qreg q[2];\n\
+               creg c[2];\n\
+               h q[0];\n\
+               cx q[0], q[1];\n\
+               measure q -> c;\n",
+        noise_json: None,
+        try_next: "zeno demo ghz",
+    },
+    Demo {
+        name: "ghz",
+        one_liner: "8-qubit entanglement: one coin flip decides all eight bits",
+        intro: &[
+            "A GHZ state is the Bell pair scaled up: one h creates a superposition",
+            "and a chain of cx gates spreads it across all 8 qubits. Measuring any",
+            "one qubit decides all of them at once, so the histogram shows only",
+            "00000000 and 11111111 — nothing in between, ever.",
+        ],
+        qasm: "OPENQASM 2.0;\n\
+               include \"qelib1.inc\";\n\
+               qreg q[8];\n\
+               creg c[8];\n\
+               h q[0];\n\
+               cx q[0], q[1];\n\
+               cx q[1], q[2];\n\
+               cx q[2], q[3];\n\
+               cx q[3], q[4];\n\
+               cx q[4], q[5];\n\
+               cx q[5], q[6];\n\
+               cx q[6], q[7];\n\
+               measure q -> c;\n",
+        noise_json: None,
+        try_next: "zeno demo qft",
+    },
+    Demo {
+        name: "qft",
+        one_liner: "quantum Fourier transform + exact inverse: a self-checking round trip",
+        intro: &[
+            "The quantum Fourier transform (QFT) is the engine inside Shor's",
+            "factoring algorithm. This circuit prepares |101>, applies a 3-qubit",
+            "QFT, then applies its exact inverse: the same gates in reverse order",
+            "with negated phase angles. A transform followed by its inverse must",
+            "return the input, so every single shot reads back 101 — the circuit",
+            "checks itself.",
+        ],
+        qasm: "OPENQASM 2.0;\n\
+               include \"qelib1.inc\";\n\
+               qreg q[3];\n\
+               creg c[3];\n\
+               x q[0];\n\
+               x q[2];\n\
+               h q[2];\n\
+               cp(pi/2) q[1], q[2];\n\
+               cp(pi/4) q[0], q[2];\n\
+               h q[1];\n\
+               cp(pi/2) q[0], q[1];\n\
+               h q[0];\n\
+               swap q[0], q[2];\n\
+               barrier q;\n\
+               swap q[0], q[2];\n\
+               h q[0];\n\
+               cp(-pi/2) q[0], q[1];\n\
+               h q[1];\n\
+               cp(-pi/4) q[0], q[2];\n\
+               cp(-pi/2) q[1], q[2];\n\
+               h q[2];\n\
+               measure q -> c;\n",
+        noise_json: None,
+        try_next: "zeno demo grover",
+    },
+    Demo {
+        name: "grover",
+        one_liner: "Grover's search finds the marked state |101> in two queries",
+        intro: &[
+            "Grover's search finds one marked item among 8 possibilities using",
+            "just two queries. The oracle flips the phase of |101>, and the",
+            "diffuser turns that hidden phase into visible amplitude. With 1",
+            "marked state in 8, two iterations succeed with probability",
+            "sin^2(5*asin(1/sqrt(8))) ~ 94.5% — against 12.5% for random guessing.",
+        ],
+        qasm: "OPENQASM 2.0;\n\
+               include \"qelib1.inc\";\n\
+               gate ccz a, b, c { h c; ccx a, b, c; h c; }\n\
+               qreg q[3];\n\
+               creg c[3];\n\
+               h q;\n\
+               x q[1];\n\
+               ccz q[0], q[1], q[2];\n\
+               x q[1];\n\
+               h q;\n\
+               x q;\n\
+               ccz q[0], q[1], q[2];\n\
+               x q;\n\
+               h q;\n\
+               x q[1];\n\
+               ccz q[0], q[1], q[2];\n\
+               x q[1];\n\
+               h q;\n\
+               x q;\n\
+               ccz q[0], q[1], q[2];\n\
+               x q;\n\
+               h q;\n\
+               measure q -> c;\n",
+        noise_json: None,
+        try_next: "zeno demo teleport",
+    },
+    Demo {
+        name: "teleport",
+        one_liner: "quantum teleportation with mid-circuit measurement and feed-forward",
+        intro: &[
+            "Teleportation moves a qubit's state using entanglement plus two",
+            "classical bits. Alice measures MID-circuit — the state collapses and",
+            "the result lands in a classical register while the circuit keeps going.",
+            "Bob's fixes are classically controlled: 'if (m1 == 1) x q[2];' runs",
+            "only on shots where that recorded bit is 1. The payload |1> always",
+            "arrives: every key below starts with 1 (Bob's out bit).",
+        ],
+        qasm: "OPENQASM 2.0;\n\
+               include \"qelib1.inc\";\n\
+               qreg q[3];\n\
+               creg m0[1];\n\
+               creg m1[1];\n\
+               creg out[1];\n\
+               x q[0];\n\
+               h q[1];\n\
+               cx q[1], q[2];\n\
+               cx q[0], q[1];\n\
+               h q[0];\n\
+               measure q[0] -> m0[0];\n\
+               measure q[1] -> m1[0];\n\
+               if (m1 == 1) x q[2];\n\
+               if (m0 == 1) z q[2];\n\
+               measure q[2] -> out[0];\n",
+        noise_json: None,
+        try_next: "zeno demo noisy",
+    },
+    Demo {
+        name: "noisy",
+        one_liner: "the Bell pair again, on simulated noisy hardware",
+        intro: &[
+            "Real quantum hardware is noisy. This is the same Bell pair as",
+            "'zeno demo bell', but every 2-qubit gate now depolarizes with",
+            "probability 0.05 and every readout bit flips with probability 0.02.",
+            "The forbidden keys 01 and 10 appear and the 00/11 correlation",
+            "degrades — exactly what real devices do.",
+        ],
+        qasm: "OPENQASM 2.0;\n\
+               include \"qelib1.inc\";\n\
+               qreg q[2];\n\
+               creg c[2];\n\
+               h q[0];\n\
+               cx q[0], q[1];\n\
+               measure q -> c;\n",
+        noise_json: Some(NOISY_DEMO_JSON),
+        try_next: "write your own circuit — see docs/TUTORIAL.md",
+    },
+];
+
+fn find_demo(name: &str) -> Option<&'static Demo> {
+    DEMOS.iter().find(|d| d.name == name)
+}
+
+fn demo_names() -> String {
+    DEMOS.iter().map(|d| d.name).collect::<Vec<_>>().join(", ")
+}
+
+fn print_demo_list(sty: &Style) {
+    println!("{}", sty.dim("built-in demos (zeno demo <name>):"));
+    let rows: Vec<Vec<String>> = DEMOS
+        .iter()
+        .map(|d| vec![sty.bold(d.name), d.one_liner.to_string()])
+        .collect();
+    print_table(&["name", "what it shows"], &rows, &[false, false], sty);
+    println!();
+    println!(
+        "{}",
+        sty.dim("all demos take --shots N, --seed S, --noise SPEC and --json")
+    );
+}
+
+fn cmd_demo(a: &DemoArgs) -> Result<(), zeno::Error> {
+    let sty = Style::detect();
+    if a.list {
+        print_demo_list(&sty);
+        return Ok(());
+    }
+    let name = a.name.as_deref().unwrap_or("bell");
+    let demo = find_demo(name).ok_or_else(|| {
+        zeno::Error::Unsupported(format!(
+            "unknown demo '{name}' — available: {} (try 'zeno demo --list')",
+            demo_names()
+        ))
+    })?;
+    // --noise overrides the demo's built-in model (if any).
+    let noise = match &a.noise {
+        Some(spec) => Some(parse_noise_spec(spec)?),
+        None => demo
+            .noise_json
+            .map(zeno::NoiseModel::from_json)
+            .transpose()?,
+    };
+    let program = zeno::qasm::parse_str(demo.qasm)?;
+    let opts = RunOptions {
+        shots: a.shots,
+        seed: a.seed,
+        noise: noise.clone(),
+        ..Default::default()
+    };
+    let r = zeno::run_program(&program, &opts)?;
+    if a.json {
+        let mut obj = run_json_base(&r);
+        obj["demo"] = serde_json::json!(demo.name);
+        obj["source"] = serde_json::json!(demo.qasm);
+        if let Some(m) = &noise {
+            obj["noise"] = serde_json::to_value(m).expect("noise model serializes");
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&obj).expect("valid json")
+        );
+        return Ok(());
+    }
+
+    println!("{}", machine_header(rayon::current_num_threads(), &sty));
+    println!(
+        "{} — {}",
+        sty.bold(&format!("demo: {}", demo.name)),
+        demo.one_liner
+    );
+    println!();
+    for line in demo.intro {
+        println!("{line}");
+    }
+    println!();
+    println!("{}", sty.dim("circuit (OpenQASM 2.0):"));
+    for line in demo.qasm.lines() {
+        println!("  {line}");
+    }
+    println!();
+    println!(
+        "{} · {} -> {} · {} · {} · {}",
+        plural(r.n_qubits as usize, "qubit"),
+        plural(r.stats.input_gates, "gate"),
+        plural(r.stats.output_ops, "op"),
+        r.precision,
+        r.backend,
+        fmt_duration(r.sim_time),
+    );
+    println!();
+    print_histogram(&r.counts, &sty);
+    for note in &r.notices {
+        println!("{}", sty.dim(&format!("note: {note}")));
+    }
+    // Teach the real flag: only when the demo's built-in model ran unchanged.
+    if let Some(json) = demo.noise_json.filter(|_| a.noise.is_none()) {
+        println!(
+            "{}",
+            sty.dim("this model works on any circuit — the equivalent flag is:")
+        );
+        println!("  zeno run yours.qasm --noise '{json}'");
+    }
+    println!(
+        "{}",
+        sty.dim(&format!("seed 0x{:016x} (reproduce with --seed)", r.seed))
+    );
+    println!();
+    println!("{} {}", sty.bold("Try next:"), demo.try_next);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1230,6 +1625,71 @@ mod tests {
     }
 
     #[test]
+    fn noise_spec_key_value_pairs() {
+        let m = parse_noise_spec("bit_flip=0.1").unwrap();
+        assert_eq!(m.bit_flip, 0.1);
+        let m = parse_noise_spec(" bit_flip = 0.1 , readout_flip_1to0 = 0.02 ").unwrap();
+        assert_eq!(m.bit_flip, 0.1);
+        assert_eq!(m.readout_flip_1to0, 0.02);
+        assert_eq!(m.phase_flip, 0.0);
+    }
+
+    #[test]
+    fn noise_spec_unknown_key_lists_valid_keys() {
+        let err = parse_noise_spec("bitflip=0.1").unwrap_err().to_string();
+        for key in NOISE_KEYS {
+            assert!(err.contains(key), "error must list '{key}': {err}");
+        }
+    }
+
+    #[test]
+    fn noise_spec_rejects_bad_values() {
+        assert!(parse_noise_spec("bit_flip=oops").is_err());
+        assert!(parse_noise_spec("bit_flip=nan").is_err());
+        assert!(parse_noise_spec("bit_flip=1.5").is_err()); // out of [0, 1]
+        assert!(parse_noise_spec("bit_flip=0.1,=0.2").is_err());
+    }
+
+    #[test]
+    fn noise_spec_inline_json() {
+        let m = parse_noise_spec(r#" {"depolarizing_2q": 0.05} "#).unwrap();
+        assert_eq!(m.depolarizing_2q, 0.05);
+        assert!(parse_noise_spec(r#"{"depol": 1}"#).is_err());
+    }
+
+    #[test]
+    fn noise_spec_missing_file_is_a_noise_error() {
+        let err = parse_noise_spec("/definitely/not/here.json")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("here.json"), "must name the file: {err}");
+    }
+
+    /// Every built-in demo must parse, run, and behave as advertised —
+    /// the printed source is exactly what executes, so this pins it.
+    #[test]
+    fn demos_parse_and_run() {
+        for demo in DEMOS {
+            let program = zeno::qasm::parse_str(demo.qasm)
+                .unwrap_or_else(|e| panic!("demo '{}' does not parse: {e}", demo.name));
+            let noise = demo
+                .noise_json
+                .map(zeno::NoiseModel::from_json)
+                .transpose()
+                .unwrap_or_else(|e| panic!("demo '{}' noise json: {e}", demo.name));
+            let opts = RunOptions {
+                shots: 500,
+                seed: Some(7),
+                noise,
+                ..Default::default()
+            };
+            let r = zeno::run_program(&program, &opts)
+                .unwrap_or_else(|e| panic!("demo '{}' fails to run: {e}", demo.name));
+            assert_eq!(r.counts.total(), 500, "demo '{}'", demo.name);
+        }
+    }
+
+    #[test]
     fn plurals() {
         assert_eq!(plural(1, "op"), "1 op");
         assert_eq!(plural(2, "op"), "2 ops");
@@ -1291,11 +1751,12 @@ mod tests {
                 mem_fraction: 0.75,
                 threads: None,
                 statevector,
+                noise: None,
                 json,
                 quiet,
             };
             if json {
-                print_run_json(&args, &r);
+                print_run_json(&args, &r, None);
             } else {
                 print_run_human(&args, &r);
             }

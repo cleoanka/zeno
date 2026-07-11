@@ -27,6 +27,7 @@ pub mod ir;
 pub mod mem;
 #[cfg(feature = "metal")]
 pub mod metal;
+pub mod noise;
 pub mod qasm;
 pub mod sample;
 pub mod state;
@@ -34,6 +35,7 @@ pub mod state;
 pub use circuit::{qft, random_circuit, Circuit};
 pub use exec::{Backend, Counts, RunOptions, RunResult};
 pub use ir::{Program, C64};
+pub use noise::NoiseModel;
 
 /// Floating-point width of the state vector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -93,6 +95,9 @@ pub enum Error {
 
     #[error("invalid circuit: {0}")]
     InvalidCircuit(String),
+
+    #[error("invalid noise model: {0}")]
+    Noise(String),
 
     #[error("{0}")]
     Unsupported(String),
@@ -181,6 +186,14 @@ impl Simulator {
         self
     }
 
+    /// Attach a trajectory-sampled noise model (see [`noise::NoiseModel`]
+    /// and docs/NOISE.md). Non-trivial models force per-shot execution
+    /// with fusion disabled; a trivial (all-zero) model is ignored.
+    pub fn noise(mut self, model: noise::NoiseModel) -> Self {
+        self.opts.noise = Some(model);
+        self
+    }
+
     pub fn options(&self) -> &RunOptions {
         &self.opts
     }
@@ -209,11 +222,19 @@ impl Simulator {
 }
 
 fn compile_options(opts: &RunOptions) -> compiler::CompileOptions {
+    // Noise channels attach to compiled-as-written gates: fusing would
+    // change what "a gate" is, so noisy runs compile with all fusion off
+    // (the executor pushes a notice). See docs/NOISE.md.
+    let noisy = opts.noise.as_ref().is_some_and(|m| !m.is_trivial());
     compiler::CompileOptions {
-        fusion_max: opts.fusion_max.unwrap_or(match opts.backend {
-            BackendChoice::Metal => 5,
-            _ => 1,
-        }),
+        fusion_max: if noisy {
+            0
+        } else {
+            opts.fusion_max.unwrap_or(match opts.backend {
+                BackendChoice::Metal => 5,
+                _ => 1,
+            })
+        },
         ..Default::default()
     }
 }

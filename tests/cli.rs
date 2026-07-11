@@ -401,3 +401,298 @@ fn compile_bell_shows_stats_and_ops() {
     assert!(v["stats"]["input_gates"].as_u64().unwrap() >= 2);
     assert!(!v["ops"].as_array().unwrap().is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// zeno demo
+// ---------------------------------------------------------------------------
+
+/// Seeded JSON run of a demo, returning the parsed output.
+fn demo_json(name: &str, extra: &[&str]) -> serde_json::Value {
+    let mut args = vec!["demo", name, "--seed", "7", "--json"];
+    args.extend_from_slice(extra);
+    let out = run(&args);
+    assert!(out.status.success(), "demo {name}: {}", stderr(&out));
+    json(&out)
+}
+
+#[test]
+fn demo_default_is_bell_and_shows_source_and_next_step() {
+    let out = run(&["demo", "--seed", "7"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("OPENQASM 2.0;"), "must show source:\n{text}");
+    assert!(text.contains("cx q[0], q[1];"), "must show gates:\n{text}");
+    assert!(text.contains("▇"), "histogram expected:\n{text}");
+    assert!(
+        text.contains("Try next: zeno demo ghz"),
+        "next-step line expected:\n{text}"
+    );
+    assert!(text.contains("seed 0x"), "seed line expected:\n{text}");
+    assert!(!out.stdout.contains(&0x1b), "no ANSI when piped");
+}
+
+#[test]
+fn demo_bell_counts_are_only_00_and_11() {
+    let v = demo_json("bell", &[]);
+    assert_eq!(v["demo"], "bell");
+    let counts = v["counts"].as_object().unwrap();
+    let mut total = 0u64;
+    for (key, n) in counts {
+        assert!(key == "00" || key == "11", "unexpected key {key}");
+        total += n.as_u64().unwrap();
+    }
+    assert_eq!(total, 1000, "demo default is 1000 shots");
+}
+
+#[test]
+fn demo_ghz_counts_are_only_all_zeros_and_all_ones() {
+    let v = demo_json("ghz", &[]);
+    for key in v["counts"].as_object().unwrap().keys() {
+        assert!(
+            key == "00000000" || key == "11111111",
+            "unexpected key {key}"
+        );
+    }
+}
+
+#[test]
+fn demo_qft_round_trip_is_deterministic_101() {
+    let v = demo_json("qft", &[]);
+    let counts = v["counts"].as_object().unwrap();
+    assert_eq!(counts.len(), 1, "round trip must be exact: {counts:?}");
+    assert_eq!(counts["101"].as_u64().unwrap(), 1000);
+}
+
+#[test]
+fn demo_grover_101_dominates() {
+    let v = demo_json("grover", &[]);
+    let counts = v["counts"].as_object().unwrap();
+    let marked = counts["101"].as_u64().unwrap();
+    for (key, n) in counts {
+        if key != "101" {
+            assert!(
+                n.as_u64().unwrap() < marked,
+                "'101' must dominate, but {key} has {n}"
+            );
+        }
+    }
+    // ~94.5% expected; 850/1000 is > 9 sigma below, so this cannot flake.
+    assert!(marked > 850, "grover success rate too low: {marked}/1000");
+}
+
+#[test]
+fn demo_teleport_out_bit_is_always_1() {
+    let v = demo_json("teleport", &[]);
+    for key in v["counts"].as_object().unwrap().keys() {
+        // Key is "out m1 m0" (last-declared creg leftmost).
+        assert!(
+            key.starts_with('1'),
+            "teleported payload must read 1, got key {key}"
+        );
+    }
+}
+
+#[test]
+fn demo_noisy_leaks_beyond_00_and_11_and_reports_the_model() {
+    let v = demo_json("noisy", &[]);
+    let counts = v["counts"].as_object().unwrap();
+    assert!(
+        counts.len() > 2,
+        "noise must produce keys beyond 00/11: {counts:?}"
+    );
+    assert_eq!(v["noise"]["depolarizing_2q"], 0.05);
+    let notices = v["notices"].as_array().unwrap();
+    assert!(
+        notices
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("trajectory sampling")),
+        "trajectory notice expected: {notices:?}"
+    );
+
+    // Human mode teaches the real flag with the equivalent JSON.
+    let out = run(&["demo", "noisy", "--seed", "7"]);
+    assert!(out.status.success());
+    let text = stdout(&out);
+    assert!(
+        text.contains("--noise '{"),
+        "must print the equivalent --noise flag:\n{text}"
+    );
+    assert!(
+        text.contains("note: noise: trajectory sampling"),
+        "human output must surface the notice:\n{text}"
+    );
+}
+
+#[test]
+fn demo_shots_and_seed_pass_through() {
+    let v = demo_json("bell", &["--shots", "200"]);
+    assert_eq!(v["shots"], 200);
+    let total: u64 = v["counts"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|n| n.as_u64().unwrap())
+        .sum();
+    assert_eq!(total, 200);
+    assert_eq!(v["seed"], 7);
+    // Same seed, same counts.
+    assert_eq!(
+        demo_json("bell", &["--shots", "200"])["counts"],
+        v["counts"]
+    );
+}
+
+#[test]
+fn demo_json_shape() {
+    let v = demo_json("bell", &[]);
+    assert_eq!(v["schema_version"], 1);
+    assert_eq!(v["demo"], "bell");
+    assert_eq!(v["n_qubits"], 2);
+    let source = v["source"].as_str().unwrap();
+    assert!(source.starts_with("OPENQASM 2.0;"));
+    assert!(source.contains("measure q -> c;"));
+    assert!(v["noise"].is_null(), "ideal demo carries no noise key");
+    assert!(v["stats"]["input_gates"].as_u64().unwrap() >= 2);
+}
+
+#[test]
+fn demo_list_names_every_demo() {
+    let out = run(&["demo", "--list"]);
+    assert!(out.status.success());
+    let text = stdout(&out);
+    for name in ["bell", "ghz", "qft", "grover", "teleport", "noisy"] {
+        assert!(text.contains(name), "--list must mention {name}:\n{text}");
+    }
+}
+
+#[test]
+fn demo_unknown_name_is_a_friendly_exit_1() {
+    let out = run(&["demo", "warp-drive"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains("warp-drive"), "must echo the name: {err}");
+    for name in ["bell", "ghz", "qft", "grover", "teleport", "noisy"] {
+        assert!(err.contains(name), "must list option {name}: {err}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// zeno run --noise
+// ---------------------------------------------------------------------------
+
+#[test]
+fn run_help_mentions_noise() {
+    let out = run(&["run", "--help"]);
+    assert!(out.status.success());
+    let text = stdout(&out);
+    assert!(text.contains("--noise"), "run --help:\n{text}");
+    assert!(
+        text.contains("bit_flip=0.01"),
+        "help must carry an example:\n{text}"
+    );
+}
+
+#[test]
+fn run_noise_key_value_changes_bell_counts() {
+    let bell = bell_qasm();
+    let base = &[
+        "run",
+        bell.to_str().unwrap(),
+        "--seed",
+        "7",
+        "--shots",
+        "2000",
+        "--json",
+    ];
+    let ideal = json(&run(base));
+    let mut noisy_args = base.to_vec();
+    noisy_args.extend_from_slice(&["--noise", "bit_flip=0.1"]);
+    let noisy = json(&run(&noisy_args));
+    assert_ne!(
+        ideal["counts"], noisy["counts"],
+        "bit_flip=0.1 must change counts at the same seed"
+    );
+    assert!(
+        noisy["counts"].as_object().unwrap().len() > 2,
+        "bit flips must leak into 01/10: {}",
+        noisy["counts"]
+    );
+    assert_eq!(noisy["noise"]["bit_flip"], 0.1);
+    assert!(ideal["noise"].is_null(), "no flag, no noise key");
+}
+
+#[test]
+fn run_noise_invalid_key_lists_the_valid_keys() {
+    let bell = bell_qasm();
+    let out = run(&["run", bell.to_str().unwrap(), "--noise", "bitflip=0.1"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains("bitflip"), "must echo the typo: {err}");
+    for key in [
+        "depolarizing_1q",
+        "depolarizing_2q",
+        "bit_flip",
+        "phase_flip",
+        "amplitude_damping",
+        "readout_flip_0to1",
+        "readout_flip_1to0",
+    ] {
+        assert!(err.contains(key), "must list valid key {key}: {err}");
+    }
+}
+
+#[test]
+fn run_noise_json_file_path() {
+    // Unique per-test filename: a shared name is a parallel-test race.
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(&dir).expect("tempdir");
+    let path = dir.join(format!("noise_file_path_{}.json", std::process::id()));
+    std::fs::write(
+        &path,
+        r#"{"readout_flip_0to1": 1.0, "readout_flip_1to0": 1.0}"#,
+    )
+    .expect("write noise json");
+    let bell = bell_qasm();
+    let out = run(&[
+        "run",
+        bell.to_str().unwrap(),
+        "--seed",
+        "7",
+        "--shots",
+        "300",
+        "--noise",
+        path.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let v = json(&out);
+    assert_eq!(v["noise"]["readout_flip_0to1"], 1.0);
+    // Both readout bits always flip: the Bell keys 00/11 become 11/00,
+    // so the key set is unchanged — but the notice must be present.
+    let notices = v["notices"].as_array().unwrap();
+    assert!(notices
+        .iter()
+        .any(|n| n.as_str().unwrap().contains("trajectory sampling")));
+    for key in v["counts"].as_object().unwrap().keys() {
+        assert!(key == "00" || key == "11", "unexpected key {key}");
+    }
+}
+
+#[test]
+fn run_noise_human_output_surfaces_the_notice() {
+    let bell = bell_qasm();
+    let out = run(&[
+        "run",
+        bell.to_str().unwrap(),
+        "--seed",
+        "7",
+        "--noise",
+        "phase_flip=0.05",
+    ]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("note: noise: trajectory sampling"),
+        "notice expected in human output:\n{text}"
+    );
+}

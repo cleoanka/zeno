@@ -5,9 +5,16 @@
 //! almost the same. Dynamic circuits (mid-circuit measurement, reset,
 //! classical control) are re-executed per shot, in parallel across shots
 //! when the per-thread state vectors fit in the memory budget.
+//!
+//! Noisy circuits ([`RunOptions::noise`] set to a non-trivial
+//! [`crate::noise::NoiseModel`]) always take the per-shot path: each shot
+//! is an independent stochastic trajectory (see [`crate::noise`] and
+//! docs/NOISE.md), with channels applied after every executed gate op and
+//! readout flips at every measurement.
 
 use crate::compiler::{COp, Compiled};
 use crate::ir::{Reg, C64};
+use crate::noise::NoiseModel;
 use crate::sample::sample_indices;
 use crate::state::{self, Real, StateVec};
 use crate::{BackendChoice, Error, Precision};
@@ -39,6 +46,12 @@ pub struct RunOptions {
     pub want_statevector: bool,
     /// Override rayon thread count.
     pub threads: Option<usize>,
+    /// Trajectory-sampled noise model. `None` — or a trivial (all-zero)
+    /// model — means an ideal simulation. A non-trivial model forces
+    /// per-shot execution with fusion disabled and is incompatible with
+    /// `want_statevector` (a noisy state is a mixture over trajectories).
+    /// See [`crate::noise`] and docs/NOISE.md.
+    pub noise: Option<NoiseModel>,
 }
 
 impl Default for RunOptions {
@@ -53,6 +66,7 @@ impl Default for RunOptions {
             mem_limit: None,
             want_statevector: false,
             threads: None,
+            noise: None,
         }
     }
 }
@@ -331,10 +345,22 @@ pub fn run_compiled(c: &Compiled, opts: &RunOptions) -> Result<RunResult, Error>
 }
 
 fn run_inner(c: &Compiled, opts: &RunOptions) -> Result<RunResult, Error> {
+    let noise = opts.noise.as_ref().filter(|m| !m.is_trivial());
+    if let Some(m) = noise {
+        m.validate()?;
+    }
     let resolved = resolve_precision(c, opts)?;
     let mut notices = resolved.notices.clone();
     let seed = opts.seed.unwrap_or_else(rand::random);
 
+    if noise.is_some() && opts.want_statevector {
+        return Err(Error::InvalidCircuit(
+            "a noise model is active: the noisy state is a mixture over \
+             trajectories and has no single final state vector (drop the \
+             statevector request or the noise model)"
+                .into(),
+        ));
+    }
     if c.dynamic && opts.want_statevector {
         return Err(Error::InvalidCircuit(
             "circuit is dynamic (mid-circuit measure/reset/if): it has no \
@@ -344,10 +370,13 @@ fn run_inner(c: &Compiled, opts: &RunOptions) -> Result<RunResult, Error> {
     }
 
     let t0 = Instant::now();
-    let (counts, statevector, backend_name) = if !c.dynamic {
+    let (counts, statevector, backend_name) = if noise.is_some() {
+        notices.push("noise: trajectory sampling — per-shot execution, fusion disabled".into());
+        run_per_shot(c, opts, &resolved, seed, &mut notices, noise)?
+    } else if !c.dynamic {
         run_sampled(c, opts, &resolved, seed, &mut notices)?
     } else {
-        run_dynamic(c, opts, &resolved, seed, &mut notices)?
+        run_per_shot(c, opts, &resolved, seed, &mut notices, None)?
     };
     let sim_time = t0.elapsed();
 
@@ -422,12 +451,18 @@ fn run_sampled(
     Ok((counts, statevector, be.name()))
 }
 
-fn run_dynamic(
+/// Per-shot execution: dynamic circuits (mid-circuit measure/reset/if)
+/// and every noisy circuit. Each shot owns a fresh trajectory seeded from
+/// `splitmix64(seed ^ shot)`, so results are reproducible and independent
+/// of the shot execution order (parallel across shots when per-thread
+/// state copies fit the memory budget).
+fn run_per_shot(
     c: &Compiled,
     opts: &RunOptions,
     resolved: &Resolved,
     seed: u64,
     notices: &mut Vec<String>,
+    noise: Option<&NoiseModel>,
 ) -> Result<(Counts, Option<Vec<C64>>, &'static str), Error> {
     let shots = opts.shots;
     let threads = rayon::current_num_threads().max(1);
@@ -438,11 +473,30 @@ fn run_dynamic(
 
     let backend_name = make_backend(c.n_qubits, resolved.precision, opts.backend)?.name();
 
+    // Only reachable on the noisy path (noiseless non-dynamic circuits are
+    // sampled analytically): nothing to record, mirror `run_sampled`.
+    if !c.dynamic && c.final_measures.is_empty() {
+        if shots > 0 {
+            notices.push("circuit has no measurements: counts are empty".into());
+        }
+        return Ok((Counts::default(), None, backend_name));
+    }
+
     let run_shot = |be: &mut dyn Backend, shot: u64| -> u64 {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(splitmix64(seed ^ shot));
         let mut clbits = 0u64;
         for op in &c.ops {
-            exec_dynamic_op(be, op, &mut rng, &mut clbits);
+            exec_shot_op(be, op, noise, &mut rng, &mut clbits);
+        }
+        // Trailing measurements of a non-dynamic (noisy) circuit: measure
+        // sequentially with collapse, then apply readout error to the
+        // recorded bit.
+        for &(qubit, clbit) in &c.final_measures {
+            let mut bit = be.measure(qubit, rng.gen::<f64>());
+            if let Some(m) = noise {
+                bit = crate::noise::readout_flip(m, bit, &mut rng);
+            }
+            clbits = (clbits & !(1u64 << clbit)) | ((bit as u64) << clbit);
         }
         clbits
     };
@@ -475,7 +529,7 @@ fn run_dynamic(
     } else {
         if !parallel && shots > 1 && !metal {
             notices.push(format!(
-                "dynamic circuit at {} qubits: shots run sequentially \
+                "per-shot execution at {} qubits: shots run sequentially \
                  (per-thread copies exceed the memory budget)",
                 c.n_qubits
             ));
@@ -494,14 +548,44 @@ fn run_dynamic(
     Ok((counts, None, backend_name))
 }
 
-fn exec_dynamic_op(be: &mut dyn Backend, op: &COp, rng: &mut Xoshiro256PlusPlus, clbits: &mut u64) {
+/// Execute one op inside a shot. With `noise` set, gate channels fire
+/// after every gate-like op (including gates guarded by a taken `if`;
+/// untaken branches execute nothing and consume no draws) and readout
+/// errors flip the recorded bit of every measurement. `reset` is not a
+/// gate and carries no gate noise.
+fn exec_shot_op(
+    be: &mut dyn Backend,
+    op: &COp,
+    noise: Option<&NoiseModel>,
+    rng: &mut Xoshiro256PlusPlus,
+    clbits: &mut u64,
+) {
     match op {
-        COp::Unitary { qubits, mat } => be.apply_unitary(qubits, mat),
-        COp::Diagonal { qubits, diag } => be.apply_diagonal(qubits, diag),
-        COp::Cx { control, target } => be.apply_cx(*control, *target),
+        COp::Unitary { qubits, mat } => {
+            be.apply_unitary(qubits, mat);
+            if let Some(m) = noise {
+                crate::noise::apply_gate_noise(be, m, qubits, rng);
+            }
+        }
+        COp::Diagonal { qubits, diag } => {
+            be.apply_diagonal(qubits, diag);
+            if let Some(m) = noise {
+                crate::noise::apply_gate_noise(be, m, qubits, rng);
+            }
+        }
+        COp::Cx { control, target } => {
+            be.apply_cx(*control, *target);
+            if let Some(m) = noise {
+                let qs = [(*control).min(*target), (*control).max(*target)];
+                crate::noise::apply_gate_noise(be, m, &qs, rng);
+            }
+        }
         COp::Measure { qubit, clbit } => {
-            let bit = be.measure(*qubit, rng.gen::<f64>()) as u64;
-            *clbits = (*clbits & !(1u64 << clbit)) | (bit << clbit);
+            let mut bit = be.measure(*qubit, rng.gen::<f64>());
+            if let Some(m) = noise {
+                bit = crate::noise::readout_flip(m, bit, rng);
+            }
+            *clbits = (*clbits & !(1u64 << clbit)) | ((bit as u64) << clbit);
         }
         COp::Reset { qubit } => {
             if be.measure(*qubit, rng.gen::<f64>()) {
@@ -527,7 +611,7 @@ fn exec_dynamic_op(be: &mut dyn Backend, op: &COp, rng: &mut Xoshiro256PlusPlus,
                 (1u64 << creg_len) - 1
             };
             if (*clbits >> creg_offset) & mask == *value {
-                exec_dynamic_op(be, inner, rng, clbits);
+                exec_shot_op(be, inner, noise, rng, clbits);
             }
         }
         COp::Barrier => unreachable!("barriers are stripped at compile time"),

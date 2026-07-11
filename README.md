@@ -41,13 +41,21 @@ cross-validated against an independent reference and against qiskit itself.
   your machine holds; runs auto-select f64/f32 per budget and refuse
   politely (with the capacity table) instead of swap-storming. 24 GB ⇒ 30
   qubits f64 / 31 qubits f32.
-- **OpenQASM 2.0 front end** with line:col errors, broadcasting, user-defined
-  gates and classical control — plus a clean Rust builder API.
+- **OpenQASM 2.0 and 3 front ends** with line:col errors, broadcasting,
+  user-defined gates and classical control (the version header picks the
+  parser) — plus a clean Rust builder API.
+- **Noise, when you want it.** Trajectory-sampled depolarizing, bit/phase
+  flip, amplitude damping and readout error via `--noise` — cross-validated
+  against qiskit-aer's noise models ([docs/NOISE.md](docs/NOISE.md)).
+- **Friendly from minute zero.** `zeno demo` runs and explains six built-in
+  circuits with no files at all, and
+  [docs/TUTORIAL.md](docs/TUTORIAL.md) takes a complete beginner from
+  "what is a qubit" to writing their own circuit in 15 minutes.
 - **Trust, not vibes.** An independently written dense reference simulator
   gates every kernel and every native gate in every argument order; 60+
   circuits cross-validated against qiskit-aer to max |Δamp| < 1e-9; all
   unsafe kernels have written disjointness proofs and were stress-tested at
-  1/3/16 threads. 140+ tests, clippy-clean, CI on Apple Silicon.
+  1/3/16 threads. 270 tests, clippy-clean, CI on Apple Silicon.
 
 ## Benchmarks
 
@@ -60,7 +68,7 @@ cross-validated against an independent reference and against qiskit itself.
 | random 20q · depth 12 | 64 ms | **40 ms** | — |
 | random 26q · depth 12 | 3.83 s | 3.86 s | **0.95 s** |
 | random 24q · depth 40 | 3.39 s | **2.99 s** | **0.73 s** |
-| QFT 24q | 607 ms | **375 ms** | **140 ms** |
+| QFT 24q | 607 ms | **258 ms** | **140 ms** |
 
 M4 Pro, medians of 3, identical files, methodology + full tables in
 [docs/PERFORMANCE.md](docs/PERFORMANCE.md). Dynamic circuits run at
@@ -83,12 +91,21 @@ exact chip.
 
 ## Use it in 10 seconds
 
+No files, no setup — `zeno demo` explains what it runs as it runs it:
+
+```sh
+zeno demo            # a Bell pair, explained
+zeno demo --list     # ghz, qft, grover, teleport, noisy ...
+```
+
+Then run real circuits:
+
 ```sh
 zeno run examples/bell.qasm --shots 1000
 ```
 
 ```
-zeno v0.1.0 · Apple M4 Pro · 12 threads
+zeno v0.2.0 · Apple M4 Pro · 12 threads
 bell · 2 qubits · 2 gates -> 2 ops · f64 · cpu-f64 · 184 µs
 
   00  ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇  502   50.2%
@@ -100,13 +117,18 @@ seed 0x000000000000002a (reproduce with --seed)
 The four subcommands:
 
 ```sh
+zeno demo [NAME]                  # built-in circuits, explained (start here)
 zeno run circuit.qasm [--shots N] [--seed S] [--precision f32|f64]
         [--backend cpu|metal] [--fusion K] [--mem-limit 8g] [--threads N]
-        [--statevector] [--json]     # simulate + histogram
+        [--noise SPEC] [--statevector] [--json]   # simulate + histogram
 zeno info                         # your machine's qubit capacity
 zeno bench --qubits 20,24,26      # reproducible throughput sweep
 zeno compile circuit.qasm         # see what the fusion compiler did
 ```
+
+`--noise` accepts inline JSON, `key=value` pairs
+(`--noise bit_flip=0.01,readout_flip_1to0=0.02`) or a JSON file — semantics
+in [docs/NOISE.md](docs/NOISE.md).
 
 `--json` everywhere for scripting; every run prints its seed so any
 histogram is replayable bit-for-bit.
@@ -159,7 +181,10 @@ line 4:1: unknown gate 'H' (gate names are case-sensitive; did you mean 'h'?)
 ```
 
 Full support matrix and the (documented) spec deviations:
-[docs/QASM.md](docs/QASM.md). Six worked examples live in
+[docs/QASM.md](docs/QASM.md) for 2.0 and [docs/QASM3.md](docs/QASM3.md) for
+the OpenQASM 3 subset (`qubit[n]`/`bit[n]`, both measure forms, `if` blocks,
+`stdgates.inc` aliases — the version header dispatches automatically).
+Six worked examples live in
 [examples/](examples/) — Bell, GHZ-24, a self-checking QFT round trip,
 Grover (94.5% in 2 iterations), teleportation with mid-circuit measurement,
 and Bernstein–Vazirani.
@@ -203,11 +228,31 @@ convention bug in `crz` before release.
 
 ## Roadmap
 
-- Explicit NEON in the 1-qubit kernel (~2× headroom measured, would shift
-  the fusion break-even) and a vectorized dense fused kernel.
-- Threadgroup-memory fused kernel for Metal.
-- Noise channels (Kraus / density-matrix or trajectory sampling).
-- OpenQASM 3 front end.
+Shipped in v0.2.0 (every claim measured, see [docs/PERFORMANCE.md](docs/PERFORMANCE.md)):
+
+- ~~Explicit NEON kernels~~ — **done.** The dense fused kernel is vectorized
+  across groups (1.7–2.9× at fusion 5), the diagonal kernel streams at DRAM
+  bandwidth (QFT-24: 1.5–1.7× end to end), all bit-identical to the scalar
+  paths by construction (`to_bits`-equality tests).
+- ~~Threadgroup-memory fused kernel for Metal~~ — **measured and closed.**
+  Best tuning reached 1.08×, below our 1.10× merge bar (Apple's cache
+  hierarchy already serves the uniform matrix reads); the experiment and
+  numbers are documented in `src/metal.rs` so it isn't blindly retried.
+- ~~Noise channels~~ — **done.** Trajectory-sampled depolarizing, bit/phase
+  flip, amplitude damping and readout error, cross-validated against
+  qiskit-aer noise models to TVD < 0.004 at 100k shots
+  ([docs/NOISE.md](docs/NOISE.md)).
+- ~~OpenQASM 3 front end~~ — **done** (documented subset, auto-detected from
+  the version header; [docs/QASM3.md](docs/QASM3.md)).
+
+Next:
+
+- OpenQASM 3 classical control: `for` loops and subroutines.
+- An exact density-matrix backend for noise (trajectories are exact per
+  model but sampling-based; a density matrix trades qubits for exactness).
+- Wider CPU fusion revisit: NEON made fused ops 1.7–2.9× faster, but the
+  1-qubit sweeps still win at the default sizes — the break-even now sits
+  closer and deserves a systematic sweep.
 
 ## License
 

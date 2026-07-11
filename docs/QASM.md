@@ -9,7 +9,7 @@ less.
 
 | Statement | Status | Notes |
 |---|---|---|
-| `OPENQASM 2.0;` | required | Must be the first statement (comments may precede it). `OPENQASM 2;` is accepted as 2.0. Any other version is an error. |
+| `OPENQASM 2.0;` | required | Must be the first statement (comments may precede it). `OPENQASM 2;` is accepted as 2.0. Version 3/3.0 dispatches to the OpenQASM 3 front end (see QASM3.md); anything else is an error. |
 | `include "qelib1.inc";` | accepted, internal | No file is ever read; the include is a no-op because the native gate set is always available (see *Deviations*). Any other include path is an error. |
 | `qreg name[n];` | supported | `n ≥ 1`. Total qubits across all qregs ≤ **48**. |
 | `creg name[n];` | supported | `n ≥ 1`. Register names are unique across qregs *and* cregs. (The compiler additionally caps total clbits at 64.) |
@@ -133,7 +133,7 @@ Deliberate, all on the permissive side except where noted:
 4. **Namespaces:** registers and gates live in separate namespaces (the spec
    has a single one). Register names are unique across qreg/creg; gate names
    are unique across native + builtin + user-defined.
-5. `OPENQASM 2;` is accepted as version 2.0.
+5. `OPENQASM 2;` is accepted as version 2.0; `OPENQASM 3;`/`3.0;` routes to the OpenQASM 3 subset parser (QASM3.md).
 6. **Limits:** ≤ 48 total qubits (front-end check, matching the compiler),
    ≤ 128 gate-expansion nesting depth. The compiler additionally enforces
    ≤ 64 classical bits.

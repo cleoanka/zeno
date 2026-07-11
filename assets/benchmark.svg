@@ -7,7 +7,7 @@
   </defs>
   <rect width="760" height="380" rx="12" fill="#0b1120"/>
   <text x="28" y="38" font-size="16" fill="#e2e8f0" font-weight="700">Same OpenQASM file, same M4 Pro — wall-clock sim time (lower is better)</text>
-  <text x="28" y="58" font-size="12.5" fill="#64748b">medians of 3 · qiskit-aer 0.17.2 statevector (f64, OpenMP) · zeno v0.1.0 · 1024 shots</text>
+  <text x="28" y="58" font-size="12.5" fill="#64748b">medians of 3 · qiskit-aer 0.17.2 statevector (f64, OpenMP) · zeno v0.2.0 · 1024 shots</text>
 
   <!-- scale: 1s = 150px, x0 = 210 -->
   <!-- group 1: random 26q depth 12 -->

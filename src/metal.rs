@@ -107,6 +107,19 @@ kernel void diag_mul(
 
 /// Fused unitary kernel template; `KVAL`/`DIMVAL` are substituted per k so
 /// the loops fully unroll and the gather arrays are exactly sized.
+///
+/// Note (2026-07, M4 Pro): a threadgroup-memory staged variant (cooperative
+/// copy of the whole `[re|im]` matrix into `threadgroup float[2*dim*dim]`
+/// plus barrier, matvec reading on-chip, arithmetic order untouched) was
+/// implemented and measured end-to-end for k ≥ 3. Best configuration
+/// (64-wide threadgroups; widths 32–1024 swept, ≥ 512 regresses badly;
+/// float4 copy, gather-before-barrier overlap and interleaved [wr wi]
+/// layout all equivalent within noise) gave a reproducible but modest
+/// 1.08x on a deep 24q fusion-5 brickwork workload — below the 1.10x
+/// merge bar, so the direct-read kernel below stays. The matrix loads are
+/// dynamically uniform across the threadgroup and evidently already served
+/// on-chip; the kernel's remaining cost is state-vector gather/scatter
+/// traffic, which staging cannot address.
 const MSL_UNITARY_TEMPLATE: &str = r#"
 // Fused KVAL-qubit unitary: each thread owns one group of DIMVAL
 // amplitudes. Matrix layout: [re[dim*dim] | im[dim*dim]], row-major.

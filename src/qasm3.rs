@@ -1,152 +1,108 @@
-//! OpenQASM 2.0 front end: hand-written lexer + recursive-descent parser.
+//! OpenQASM 3 front end (documented subset): hand-written lexer +
+//! recursive-descent parser, in the same style as [`super`] (the
+//! OpenQASM 2.0 front end).
 //!
-//! Interface contract (the rest of the crate depends on exactly this):
-//! - `parse_str(&str) -> Result<Program, QasmError>`
-//! - `parse_file(&Path) -> Result<Program, Error>`
-//! - `QasmError { line, col, msg }` with `Display`.
+//! Reached exclusively through [`super::parse_str`]'s version dispatch:
+//! sources that open with `OPENQASM 3;` or `OPENQASM 3.0;` are parsed here,
+//! into the exact same [`Program`] IR and with the same
+//! [`QasmError`] type.
 //!
-//! Supported language (see `docs/QASM.md` for the full matrix):
-//! - `OPENQASM 2.0;` header (mandatory, first statement).
-//! - `include "qelib1.inc";` — recognized and satisfied *internally*; no file
-//!   is read. The crate's native gate set ([`crate::gates::lookup`]) is always
-//!   available, even without the include (a friendly superset of the spec).
-//! - `qreg`/`creg` declarations, `gate` definitions (expanded inline at call
-//!   sites, nesting depth ≤ 128), gate calls with spec broadcasting,
-//!   `measure`, `reset`, `barrier`, `if (creg == n) qop;`.
-//! - Parameter expressions: literals, `pi`, bound gate parameters,
-//!   `+ - * / ^` (`^` binds tightest, right-assoc), unary `-`, parentheses,
-//!   `sin cos tan exp ln sqrt` — evaluated to `f64` at parse time.
+//! Supported subset (frozen; see `docs/QASM3.md` for the full matrix):
+//! - `OPENQASM 3;` / `OPENQASM 3.0;` header (mandatory, first statement).
+//! - `include "stdgates.inc";` — satisfied *internally*; the crate's native
+//!   gate set is a superset. Additional OpenQASM 3 aliases: `U` → `u3`,
+//!   `CX` → `cx`, `phase` → `p`, `cphase` → `cp`.
+//! - `qubit[n] name;` / `qubit name;` (size 1) and `bit[n] name;` /
+//!   `bit name;` declarations (declare-before-use, like OpenQASM 2).
+//! - Gate calls with OpenQASM 2-style register broadcasting; `name[i]`
+//!   indexing; user `gate` definitions expanded inline (nesting ≤ 128).
+//! - Measurement both ways: `c = measure q;` / `c[i] = measure q[j];`
+//!   (assignment form) and `measure q -> c;` (arrow form), with register
+//!   broadcasting when sizes match.
+//! - `reset`, `barrier` (no arguments = all qubits), and
+//!   `if (creg == n) op;` plus the block form `if (creg == n) { op; ... }`,
+//!   lowered to one [`Instr::If`] per contained op.
+//! - Parameter expressions: the OpenQASM 2 grammar plus `π` (= `pi`) and
+//!   `tau`/`τ` (= 2π).
+//!
+//! Everything else in OpenQASM 3 (for/while, def, gate modifiers, timing,
+//! typed declarations, input/output, arrays, switch, extern, pragmas,
+//! annotations, …) is rejected with an explicit error naming the feature.
 //!
 //! Every error carries an accurate 1-based line and column, names the
 //! offending token and says what was expected.
-//!
-//! [`parse_str`] is the single entry point for *all* OpenQASM source: it
-//! dispatches on the declared version — `2.x` is parsed by this module,
-//! `3` / `3.0` by the [`qasm3`] subset front end (same [`Program`] IR, same
-//! [`QasmError`] type; see `docs/QASM3.md`).
 
+use super::QasmError;
 use crate::gates;
 use crate::ir::{GateInstr, Instr, Program, Reg};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
-/// OpenQASM 3 front end (documented subset), reached via [`parse_str`]'s
-/// version dispatch.
-#[path = "qasm3.rs"]
-mod qasm3;
-
-/// Maximum nesting depth when expanding user-defined gates.
+/// Maximum nesting depth when expanding user-defined gates (same limit as
+/// the OpenQASM 2 front end).
 const MAX_EXPANSION_DEPTH: usize = 128;
 
-/// Maximum total number of qubits across all `qreg` declarations.
+/// Maximum total number of qubits across all `qubit` declarations (same
+/// limit as the OpenQASM 2 front end).
 const MAX_TOTAL_QUBITS: u32 = 48;
 
 /// Words that cannot be used as register, gate or parameter names.
 const RESERVED: &[&str] = &[
-    "OPENQASM", "include", "qreg", "creg", "gate", "opaque", "measure", "reset", "barrier", "if",
-    "pi", "U", "CX",
+    "OPENQASM", "include", "qubit", "bit", "qreg", "creg", "gate", "opaque", "measure", "reset",
+    "barrier", "if", "else", "pi", "π", "tau", "τ", "U", "CX", "for", "while", "in", "def",
+    "defcal", "cal", "ctrl", "negctrl", "inv", "pow", "delay", "duration", "stretch", "float",
+    "int", "uint", "angle", "bool", "complex", "const", "input", "output", "array", "switch",
+    "case", "default", "extern", "pragma", "let", "box", "return", "break", "continue", "end",
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QasmError {
-    pub line: usize,
-    pub col: usize,
-    pub msg: String,
-}
-
-impl std::fmt::Display for QasmError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "line {}:{}: {}", self.line, self.col, self.msg)
+fn err(line: usize, col: usize, msg: impl Into<String>) -> QasmError {
+    QasmError {
+        line,
+        col,
+        msg: msg.into(),
     }
 }
 
-impl std::error::Error for QasmError {}
+/// If `word` opens an OpenQASM 3 construct that is outside zeno's subset,
+/// return the human name of the feature for the rejection message.
+fn unsupported_feature(word: &str) -> Option<&'static str> {
+    Some(match word {
+        "for" => "for loops",
+        "while" => "while loops",
+        "def" => "def subroutines",
+        "defcal" | "cal" => "calibration blocks ('defcal'/'cal')",
+        "ctrl" | "negctrl" | "inv" | "pow" => "gate modifiers ('ctrl@'/'negctrl@'/'inv@'/'pow@')",
+        "delay" => "'delay' instructions",
+        "duration" | "stretch" => "'duration'/'stretch' timing types",
+        "float" | "int" | "uint" | "angle" | "bool" | "complex" => {
+            "typed classical declarations ('float'/'int'/'uint'/'angle'/'bool'/'complex')"
+        }
+        "const" => "'const' declarations",
+        "input" | "output" => "'input'/'output' parameters",
+        "array" => "arrays beyond 1-D qubit/bit registers",
+        "switch" => "'switch' statements",
+        "extern" => "'extern' declarations",
+        "pragma" | "#pragma" => "pragma directives",
+        "else" => "'else' clauses",
+        "let" => "'let' register aliases",
+        "box" => "'box' scopes",
+        "return" | "break" | "continue" => "'return'/'break'/'continue' statements",
+        _ => return None,
+    })
+}
 
-/// Parse OpenQASM source into a [`Program`].
-///
-/// The declared version selects the front end: `OPENQASM 2.0;` (or `2;`)
-/// uses the OpenQASM 2.0 parser in this module; `OPENQASM 3;` / `OPENQASM
-/// 3.0;` uses the OpenQASM 3 subset parser ([`qasm3`], `docs/QASM3.md`).
-pub fn parse_str(src: &str) -> Result<Program, QasmError> {
-    if sniff_version_is_3(src) {
-        return qasm3::parse_str(src);
-    }
+/// Build the standard rejection error for a named unsupported feature.
+fn unsupported(line: usize, col: usize, feature: &str) -> QasmError {
+    err(
+        line,
+        col,
+        format!("{feature} are not supported in zeno's OpenQASM 3 subset (see docs/QASM3.md)"),
+    )
+}
+
+/// Parse OpenQASM 3 (subset) source into a [`Program`].
+pub(super) fn parse_str(src: &str) -> Result<Program, QasmError> {
     let tokens = lex(src)?;
     Parser::new(tokens).parse_program()
-}
-
-/// Parse an OpenQASM file (2.0 or the 3.0 subset) into a [`Program`].
-pub fn parse_file(path: &Path) -> Result<Program, crate::Error> {
-    let src = std::fs::read_to_string(path)?;
-    Ok(parse_str(&src)?)
-}
-
-/// `true` if the source opens (after whitespace and comments) with an
-/// `OPENQASM <version>` header whose version equals 3 (`3`, `3.0`, …).
-///
-/// Never errors: anything malformed falls through to the OpenQASM 2.0
-/// parser, which owns the diagnostics. Block comments are skipped too so
-/// that an OpenQASM 3 file opening with `/* … */` is routed correctly.
-fn sniff_version_is_3(src: &str) -> bool {
-    /// Skip whitespace, `//` line comments and `/* */` block comments;
-    /// `false` on an unterminated block comment or a stray `/`.
-    fn skip_trivia(it: &mut std::iter::Peekable<std::str::Chars>) -> bool {
-        loop {
-            match it.peek().copied() {
-                Some(c) if c.is_whitespace() => {
-                    it.next();
-                }
-                Some('/') => {
-                    it.next();
-                    match it.peek().copied() {
-                        Some('/') => {
-                            for c in it.by_ref() {
-                                if c == '\n' {
-                                    break;
-                                }
-                            }
-                        }
-                        Some('*') => {
-                            it.next();
-                            let mut prev = '\0';
-                            loop {
-                                match it.next() {
-                                    Some('/') if prev == '*' => break,
-                                    Some(c) => prev = c,
-                                    None => return false,
-                                }
-                            }
-                        }
-                        _ => return false,
-                    }
-                }
-                _ => return true,
-            }
-        }
-    }
-
-    let mut it = src.chars().peekable();
-    if !skip_trivia(&mut it) {
-        return false;
-    }
-    for want in "OPENQASM".chars() {
-        if it.next() != Some(want) {
-            return false;
-        }
-    }
-    // Require a token boundary after the keyword, then read the version.
-    match it.peek().copied() {
-        Some(c) if c.is_whitespace() || c == '/' => {}
-        _ => return false,
-    }
-    if !skip_trivia(&mut it) {
-        return false;
-    }
-    let mut ver = String::new();
-    while matches!(it.peek(), Some(c) if c.is_ascii_digit() || *c == '.') {
-        ver.push(it.next().unwrap());
-    }
-    matches!(ver.parse::<f64>(), Ok(v) if v == 3.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +135,10 @@ enum Tok {
     Slash,
     Caret,
     Arrow,
+    Eq,
     EqEq,
+    At,
+    Colon,
     Eof,
 }
 
@@ -204,7 +163,10 @@ impl Tok {
             Tok::Slash => "'/'".into(),
             Tok::Caret => "'^'".into(),
             Tok::Arrow => "'->'".into(),
+            Tok::Eq => "'='".into(),
             Tok::EqEq => "'=='".into(),
+            Tok::At => "'@'".into(),
+            Tok::Colon => "':'".into(),
             Tok::Eof => "end of input".into(),
         }
     }
@@ -215,14 +177,6 @@ struct Token {
     tok: Tok,
     line: usize,
     col: usize,
-}
-
-fn err(line: usize, col: usize, msg: impl Into<String>) -> QasmError {
-    QasmError {
-        line,
-        col,
-        msg: msg.into(),
-    }
 }
 
 /// Character stream with 1-based line/column tracking.
@@ -277,13 +231,29 @@ fn lex(src: &str) -> Result<Vec<Token>, QasmError> {
         let tok = match c {
             '/' => {
                 cs.bump();
-                if cs.peek() == Some('/') {
-                    while matches!(cs.peek(), Some(c) if c != '\n') {
-                        cs.bump();
+                match cs.peek() {
+                    Some('/') => {
+                        while matches!(cs.peek(), Some(c) if c != '\n') {
+                            cs.bump();
+                        }
+                        continue;
                     }
-                    continue;
+                    Some('*') => {
+                        cs.bump();
+                        let mut prev = '\0';
+                        loop {
+                            match cs.bump() {
+                                Some('/') if prev == '*' => break,
+                                Some(c) => prev = c,
+                                None => {
+                                    return Err(err(line, col, "unterminated block comment"));
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    _ => Tok::Slash,
                 }
-                Tok::Slash
             }
             ';' => {
                 cs.bump();
@@ -329,6 +299,14 @@ fn lex(src: &str) -> Result<Vec<Token>, QasmError> {
                 cs.bump();
                 Tok::Caret
             }
+            '@' => {
+                cs.bump();
+                Tok::At
+            }
+            ':' => {
+                cs.bump();
+                Tok::Colon
+            }
             '-' => {
                 cs.bump();
                 if cs.peek() == Some('>') {
@@ -344,11 +322,25 @@ fn lex(src: &str) -> Result<Vec<Token>, QasmError> {
                     cs.bump();
                     Tok::EqEq
                 } else {
+                    Tok::Eq
+                }
+            }
+            '#' => {
+                cs.bump();
+                let mut s = String::from("#");
+                while matches!(cs.peek(), Some(c) if c.is_ascii_alphanumeric() || c == '_') {
+                    s.push(cs.bump().unwrap());
+                }
+                if s == "#pragma" {
+                    Tok::Ident(s)
+                } else {
                     return Err(err(
                         line,
                         col,
-                        "found a single '='; the only equality operator is '==' \
-                         (as in 'if (c == 1)')",
+                        format!(
+                            "unexpected character '#' (in '{s}'; only '#pragma' is lexed, \
+                                 and pragma directives are rejected)"
+                        ),
                     ));
                 }
             }
@@ -365,6 +357,10 @@ fn lex(src: &str) -> Result<Vec<Token>, QasmError> {
                     }
                 }
                 Tok::Str(s)
+            }
+            'π' | 'τ' => {
+                cs.bump();
+                Tok::Ident(c.to_string())
             }
             c if c.is_ascii_digit() || c == '.' => lex_number(&mut cs, line, col)?,
             c if c.is_ascii_alphabetic() || c == '_' => {
@@ -479,6 +475,7 @@ impl Func {
 enum Expr {
     Num(f64),
     Pi,
+    Tau,
     Param(usize),
     Neg(Box<Expr>),
     Bin(BinOp, Box<Expr>, Box<Expr>),
@@ -490,6 +487,7 @@ impl Expr {
         match self {
             Expr::Num(v) => *v,
             Expr::Pi => std::f64::consts::PI,
+            Expr::Tau => std::f64::consts::TAU,
             Expr::Param(i) => params[*i],
             Expr::Neg(e) => -e.eval(params),
             Expr::Bin(op, a, b) => {
@@ -527,7 +525,7 @@ impl Expr {
 enum MacroStmt {
     Call {
         /// Resolved callee name: a native gate or a previously defined macro
-        /// (`U`/`CX` are resolved to `u3`/`cx` at definition time).
+        /// (`U`/`CX`/`phase`/`cphase` are resolved at definition time).
         name: String,
         params: Vec<Expr>,
         args: Vec<usize>,
@@ -584,6 +582,11 @@ impl Parser {
 
     fn peek(&self) -> &Token {
         &self.toks[self.pos.min(self.toks.len() - 1)]
+    }
+
+    /// The token `n` positions ahead of the cursor (saturating at Eof).
+    fn peek_at(&self, n: usize) -> &Tok {
+        &self.toks[(self.pos + n).min(self.toks.len() - 1)].tok
     }
 
     fn advance(&mut self) -> Token {
@@ -700,7 +703,7 @@ impl Parser {
                     t.line,
                     t.col,
                     format!(
-                        "expected 'OPENQASM 2.0;' as the first statement, found {}",
+                        "expected 'OPENQASM 3;' as the first statement, found {}",
                         other.describe()
                     ),
                 ));
@@ -708,25 +711,26 @@ impl Parser {
         }
         let t = self.peek().clone();
         match &t.tok {
-            Tok::Number { text, value, .. } => {
-                if *value != 2.0 {
-                    return Err(err(
-                        t.line,
-                        t.col,
-                        format!(
-                            "unsupported OpenQASM version '{text}' (supported: 2.0, or the \
-                             OpenQASM 3 subset via 'OPENQASM 3;')"
-                        ),
-                    ));
-                }
+            Tok::Number { text, .. } if text == "3" || text == "3.0" => {
                 self.advance();
+            }
+            Tok::Number { text, .. } => {
+                return Err(err(
+                    t.line,
+                    t.col,
+                    format!(
+                        "unsupported OpenQASM version '{text}' for the OpenQASM 3 front end \
+                         (write 'OPENQASM 3;' or 'OPENQASM 3.0;'; version 2.0 is handled by \
+                         the OpenQASM 2 front end)"
+                    ),
+                ));
             }
             other => {
                 return Err(err(
                     t.line,
                     t.col,
                     format!(
-                        "expected version number '2.0' after 'OPENQASM', found {}",
+                        "expected version number '3' or '3.0' after 'OPENQASM', found {}",
                         other.describe()
                     ),
                 ));
@@ -738,6 +742,9 @@ impl Parser {
 
     fn parse_statement(&mut self) -> Result<(), QasmError> {
         let t = self.peek().clone();
+        if t.tok == Tok::At {
+            return Err(unsupported(t.line, t.col, "annotations ('@name')"));
+        }
         let Tok::Ident(word) = &t.tok else {
             return Err(err(
                 t.line,
@@ -745,6 +752,9 @@ impl Parser {
                 format!("expected a statement, found {}", t.tok.describe()),
             ));
         };
+        if let Some(feature) = unsupported_feature(word) {
+            return Err(unsupported(t.line, t.col, feature));
+        }
         match word.as_str() {
             "OPENQASM" => Err(err(
                 t.line,
@@ -752,7 +762,19 @@ impl Parser {
                 "duplicate 'OPENQASM' header (it must appear exactly once, first)",
             )),
             "include" => self.parse_include(),
-            "qreg" | "creg" => self.parse_reg_decl(),
+            "qubit" | "bit" => self.parse_reg_decl(),
+            "qreg" => Err(err(
+                t.line,
+                t.col,
+                "'qreg' is OpenQASM 2 syntax; in OpenQASM 3 declare quantum registers with \
+                 'qubit[n] name;'",
+            )),
+            "creg" => Err(err(
+                t.line,
+                t.col,
+                "'creg' is OpenQASM 2 syntax; in OpenQASM 3 declare classical registers with \
+                 'bit[n] name;'",
+            )),
             "gate" => self.parse_gate_def(),
             "opaque" => Err(err(
                 t.line,
@@ -772,7 +794,7 @@ impl Parser {
         self.advance(); // 'include'
         let t = self.peek().clone();
         match &t.tok {
-            Tok::Str(name) if name == "qelib1.inc" => {
+            Tok::Str(name) if name == "stdgates.inc" => {
                 self.advance();
             }
             Tok::Str(name) => {
@@ -780,7 +802,7 @@ impl Parser {
                     t.line,
                     t.col,
                     format!(
-                        "cannot include \"{name}\": only \"qelib1.inc\" is supported \
+                        "cannot include \"{name}\": only \"stdgates.inc\" is supported \
                          (and it is satisfied internally — the native gate set is \
                          always available)"
                     ),
@@ -802,8 +824,18 @@ impl Parser {
     }
 
     fn parse_reg_decl(&mut self) -> Result<(), QasmError> {
-        let kw = self.advance(); // 'qreg' | 'creg'
-        let is_q = matches!(&kw.tok, Tok::Ident(s) if s == "qreg");
+        let kw = self.advance(); // 'qubit' | 'bit'
+        let is_q = matches!(&kw.tok, Tok::Ident(s) if s == "qubit");
+        let (size, sline, scol) = if self.eat(&Tok::LBracket) {
+            let (size, sline, scol) = self.expect_uint(u32::MAX as u64, "a register size")?;
+            if size == 0 {
+                return Err(err(sline, scol, "register size must be at least 1"));
+            }
+            self.expect(&Tok::RBracket, "after the register size")?;
+            (size as u32, sline, scol)
+        } else {
+            (1, kw.line, kw.col)
+        };
         let (name, nline, ncol) = self.expect_name("a register name")?;
         if self.qregs.contains_key(&name) || self.cregs.contains_key(&name) {
             return Err(err(
@@ -812,14 +844,7 @@ impl Parser {
                 format!("register '{name}' is already declared"),
             ));
         }
-        self.expect(&Tok::LBracket, "before the register size")?;
-        let (size, sline, scol) = self.expect_uint(u32::MAX as u64, "a register size")?;
-        if size == 0 {
-            return Err(err(sline, scol, "register size must be at least 1"));
-        }
-        self.expect(&Tok::RBracket, "after the register size")?;
         self.expect(&Tok::Semi, "after the register declaration")?;
-        let size = size as u32;
         if is_q {
             let total = self.prog.n_qubits() as u64 + size as u64;
             if total > MAX_TOTAL_QUBITS as u64 {
@@ -827,7 +852,7 @@ impl Parser {
                     sline,
                     scol,
                     format!(
-                        "declaring 'qreg {name}[{size}]' would bring the total to {total} \
+                        "declaring 'qubit[{size}] {name}' would bring the total to {total} \
                          qubits; the maximum is {MAX_TOTAL_QUBITS}"
                     ),
                 ));
@@ -843,11 +868,15 @@ impl Parser {
 
     // -- quantum operations ---------------------------------------------------
 
-    /// Parse one quantum operation (gate call, measure, reset, barrier or if)
-    /// including the trailing ';', returning the broadcast-expanded
-    /// instructions. `in_if` restricts to the ops allowed under `if`.
+    /// Parse one quantum operation (gate call, measure — either form —,
+    /// reset, barrier or if) including the trailing ';', returning the
+    /// broadcast-expanded instructions. `in_if` restricts to the ops allowed
+    /// under `if`.
     fn parse_qop(&mut self, in_if: bool) -> Result<Vec<Instr>, QasmError> {
         let t = self.peek().clone();
+        if t.tok == Tok::At {
+            return Err(unsupported(t.line, t.col, "annotations ('@name')"));
+        }
         let Tok::Ident(word) = &t.tok else {
             return Err(err(
                 t.line,
@@ -855,24 +884,47 @@ impl Parser {
                 format!("expected a quantum operation, found {}", t.tok.describe()),
             ));
         };
+        if let Some(feature) = unsupported_feature(word) {
+            return Err(unsupported(t.line, t.col, feature));
+        }
         match word.as_str() {
-            "measure" => self.parse_measure(),
+            "measure" => self.parse_measure_arrow(),
             "reset" => self.parse_reset(),
             "barrier" if in_if => Err(err(
                 t.line,
                 t.col,
-                "'barrier' cannot be the body of an 'if' statement \
-                 (only gate calls, measure and reset can)",
+                "'barrier' is not allowed under 'if' \
+                 (only gate calls, measure and reset are)",
             )),
             "barrier" => self.parse_barrier(),
             "if" if in_if => Err(err(t.line, t.col, "'if' statements cannot be nested")),
             "if" => self.parse_if(),
-            "include" | "qreg" | "creg" | "gate" | "opaque" | "OPENQASM" => Err(err(
-                t.line,
-                t.col,
-                format!("'{word}' is not a quantum operation (it cannot follow 'if')"),
-            )),
+            "include" | "qubit" | "bit" | "qreg" | "creg" | "gate" | "opaque" | "OPENQASM" => {
+                Err(err(
+                    t.line,
+                    t.col,
+                    format!(
+                        "'{word}' is not a quantum operation \
+                         (only gate calls, measure and reset can appear under 'if')"
+                    ),
+                ))
+            }
+            _ if self.looks_like_assignment() => self.parse_measure_assign(),
             _ => self.parse_gate_call(),
+        }
+    }
+
+    /// Lookahead: `ident =` or `ident [ uint ] =` starts a measurement
+    /// assignment rather than a gate call.
+    fn looks_like_assignment(&self) -> bool {
+        match self.peek_at(1) {
+            Tok::Eq => true,
+            Tok::LBracket => {
+                matches!(self.peek_at(2), Tok::Number { .. })
+                    && *self.peek_at(3) == Tok::RBracket
+                    && *self.peek_at(4) == Tok::Eq
+            }
+            _ => false,
         }
     }
 
@@ -882,7 +934,8 @@ impl Parser {
             Tok::Ident(s) => (s.clone(), name_tok.line, name_tok.col),
             _ => unreachable!("dispatched on Ident"),
         };
-        // Resolve the callee: builtins U/CX, then user macros, then natives.
+        // Resolve the callee: OpenQASM 3 builtins/aliases, then user macros,
+        // then natives.
         let (resolved, n_params, arity, is_macro) = self.resolve_gate(&name, line, col)?;
 
         // Optional parameter list, evaluated immediately (top level has no
@@ -950,17 +1003,22 @@ impl Parser {
     }
 
     /// Resolve a gate name to `(resolved_name, n_params, arity, is_macro)`.
+    ///
+    /// OpenQASM 3 aliases handled here: the builtin `U` → `u3`, and the
+    /// `stdgates.inc` compatibility names `CX` → `cx`, `phase` → `p`,
+    /// `cphase` → `cp`.
     fn resolve_gate(
         &self,
         name: &str,
         line: usize,
         col: usize,
     ) -> Result<(String, usize, usize, bool), QasmError> {
-        if name == "U" {
-            return Ok(("u3".into(), 3, 1, false));
-        }
-        if name == "CX" {
-            return Ok(("cx".into(), 0, 2, false));
+        match name {
+            "U" => return Ok(("u3".into(), 3, 1, false)),
+            "CX" => return Ok(("cx".into(), 0, 2, false)),
+            "phase" => return Ok(("p".into(), 1, 1, false)),
+            "cphase" => return Ok(("cp".into(), 1, 2, false)),
+            _ => {}
         }
         if let Some(m) = self.macros.get(name) {
             return Ok((name.into(), m.n_params, m.n_qargs, true));
@@ -1056,6 +1114,12 @@ impl Parser {
         };
         if self.eat(&Tok::LBracket) {
             let (i, iline, icol) = self.expect_uint(u32::MAX as u64, "a register index")?;
+            if self.peek().tok == Tok::Colon {
+                return Err(self.err_here(format!(
+                    "range indexing on register '{name}' is not supported in zeno's \
+                     OpenQASM 3 subset (see docs/QASM3.md); index a single bit"
+                )));
+            }
             self.expect(&Tok::RBracket, "after the register index")?;
             if i >= size as u64 {
                 return Err(err(
@@ -1132,13 +1196,53 @@ impl Parser {
         format!("#{q}")
     }
 
-    fn parse_measure(&mut self) -> Result<Vec<Instr>, QasmError> {
+    /// `measure q -> c;` — the OpenQASM 2-compatible arrow form.
+    fn parse_measure_arrow(&mut self) -> Result<Vec<Instr>, QasmError> {
         let kw = self.advance(); // 'measure'
         let src = self.parse_q_arg()?;
         self.expect(&Tok::Arrow, "between the qubit and the classical target")?;
         let dst = self.parse_c_arg()?;
         self.expect(&Tok::Semi, "after the measure statement")?;
-        // Normalize size-1 whole registers to their single bit.
+        self.lower_measure(src, dst, kw.line, kw.col)
+    }
+
+    /// `c = measure q;` / `c[i] = measure q[j];` — the OpenQASM 3
+    /// assignment form.
+    fn parse_measure_assign(&mut self) -> Result<Vec<Instr>, QasmError> {
+        let start = self.peek().clone();
+        let dst = self.parse_c_arg()?;
+        self.expect(&Tok::Eq, "in the measurement assignment")?;
+        let t = self.peek().clone();
+        match &t.tok {
+            Tok::Ident(s) if s == "measure" => {
+                self.advance();
+            }
+            other => {
+                return Err(err(
+                    t.line,
+                    t.col,
+                    format!(
+                        "expected 'measure' after '=' (in this subset an assignment can \
+                         only store a measurement result), found {}",
+                        other.describe()
+                    ),
+                ));
+            }
+        }
+        let src = self.parse_q_arg()?;
+        self.expect(&Tok::Semi, "after the measurement assignment")?;
+        self.lower_measure(src, dst, start.line, start.col)
+    }
+
+    /// Shared lowering for both measure forms: normalize size-1 whole
+    /// registers, then emit per-bit [`Instr::Measure`]s with size checks.
+    fn lower_measure(
+        &self,
+        src: ArgVal,
+        dst: ArgVal,
+        line: usize,
+        col: usize,
+    ) -> Result<Vec<Instr>, QasmError> {
         let norm = |a: ArgVal| match a {
             ArgVal::Whole(_, 1, off) => ArgVal::Bit(off),
             other => other,
@@ -1148,8 +1252,8 @@ impl Parser {
             (ArgVal::Whole(qi, qs, qoff), ArgVal::Whole(ci, cs, coff)) => {
                 if qs != cs {
                     return Err(err(
-                        kw.line,
-                        kw.col,
+                        line,
+                        col,
                         format!(
                             "measure size mismatch: quantum register '{}' has size {qs} but \
                              classical register '{}' has size {cs}",
@@ -1165,8 +1269,8 @@ impl Parser {
                     .collect())
             }
             (ArgVal::Whole(qi, qs, _), ArgVal::Bit(_)) => Err(err(
-                kw.line,
-                kw.col,
+                line,
+                col,
                 format!(
                     "cannot broadcast measure: '{}' is a register of size {qs} but the \
                      target is a single classical bit",
@@ -1174,8 +1278,8 @@ impl Parser {
                 ),
             )),
             (ArgVal::Bit(_), ArgVal::Whole(ci, cs, _)) => Err(err(
-                kw.line,
-                kw.col,
+                line,
+                col,
                 format!(
                     "cannot broadcast measure: the source is a single qubit but '{}' is a \
                      classical register of size {cs}",
@@ -1199,6 +1303,11 @@ impl Parser {
 
     fn parse_barrier(&mut self) -> Result<Vec<Instr>, QasmError> {
         self.advance(); // 'barrier'
+
+        // OpenQASM 3: a bare `barrier;` applies to all qubits declared so far.
+        if self.eat(&Tok::Semi) {
+            return Ok(vec![Instr::Barrier((0..self.prog.n_qubits()).collect())]);
+        }
         let mut qubits = Vec::new();
         let mut seen = HashSet::new();
         loop {
@@ -1256,10 +1365,30 @@ impl Parser {
                  ('if ({name} == n)'), not an indexed bit"
             )));
         }
+        if self.peek().tok == Tok::Eq {
+            return Err(self.err_here(
+                "found a single '='; the comparison operator in an if condition is '=='",
+            ));
+        }
         self.expect(&Tok::EqEq, "in the if condition")?;
         let (value, _, _) = self.expect_uint(u64::MAX, "the if comparison value")?;
         self.expect(&Tok::RParen, "after the if condition")?;
-        let ops = self.parse_qop(true)?;
+
+        // Body: a single op, or a `{ op; op; ... }` block lowered to one
+        // `Instr::If` per contained op.
+        let ops = if self.eat(&Tok::LBrace) {
+            let mut ops = Vec::new();
+            while self.peek().tok != Tok::RBrace {
+                if self.peek().tok == Tok::Eof {
+                    return Err(self.err_here("unclosed 'if' block: expected '}'"));
+                }
+                ops.extend(self.parse_qop(true)?);
+            }
+            self.advance(); // '}'
+            ops
+        } else {
+            self.parse_qop(true)?
+        };
         Ok(ops
             .into_iter()
             .map(|op| Instr::If {
@@ -1280,6 +1409,13 @@ impl Parser {
                 nline,
                 ncol,
                 format!("gate '{name}' is already defined (it is a native gate)"),
+            ));
+        }
+        if matches!(name.as_str(), "phase" | "cphase") {
+            return Err(err(
+                nline,
+                ncol,
+                format!("gate '{name}' is already defined (it is a built-in stdgates alias)"),
             ));
         }
         if self.macros.contains_key(&name) {
@@ -1364,6 +1500,9 @@ impl Parser {
                 ),
             ));
         };
+        if let Some(feature) = unsupported_feature(word) {
+            return Err(unsupported(t.line, t.col, feature));
+        }
         match word.as_str() {
             "barrier" => {
                 self.advance();
@@ -1378,16 +1517,15 @@ impl Parser {
                 args.dedup();
                 Ok(MacroStmt::Barrier { args })
             }
-            "measure" | "reset" | "if" | "qreg" | "creg" | "gate" | "opaque" | "include" => {
-                Err(err(
-                    t.line,
-                    t.col,
-                    format!(
-                        "'{word}' is not allowed inside a gate body \
-                         (only gate calls and 'barrier' are)"
-                    ),
-                ))
-            }
+            "measure" | "reset" | "if" | "qubit" | "bit" | "qreg" | "creg" | "gate" | "opaque"
+            | "include" => Err(err(
+                t.line,
+                t.col,
+                format!(
+                    "'{word}' is not allowed inside a gate body \
+                     (only gate calls and 'barrier' are)"
+                ),
+            )),
             callee => {
                 let callee = callee.to_string();
                 self.advance();
@@ -1589,7 +1727,8 @@ impl Parser {
         }
     }
 
-    /// atom := number | 'pi' | param | func '(' expr ')' | '(' expr ')'
+    /// atom := number | 'pi'/'π' | 'tau'/'τ' | param | func '(' expr ')'
+    ///       | '(' expr ')'
     fn parse_atom(&mut self, scope: &[String]) -> Result<Expr, QasmError> {
         let t = self.peek().clone();
         match &t.tok {
@@ -1604,9 +1743,13 @@ impl Parser {
                 self.expect(&Tok::RParen, "to close the parenthesized expression")?;
                 Ok(e)
             }
-            Tok::Ident(name) if name == "pi" => {
+            Tok::Ident(name) if name == "pi" || name == "π" => {
                 self.advance();
                 Ok(Expr::Pi)
+            }
+            Tok::Ident(name) if name == "tau" || name == "τ" => {
+                self.advance();
+                Ok(Expr::Tau)
             }
             Tok::Ident(name) => {
                 if let Some(f) = Func::from_name(name) {
@@ -1638,7 +1781,8 @@ impl Parser {
                 t.line,
                 t.col,
                 format!(
-                    "expected a number, 'pi', a parameter or '(' in expression, found {}",
+                    "expected a number, 'pi'/'π', 'tau'/'τ', a parameter or '(' in \
+                     expression, found {}",
                     other.describe()
                 ),
             )),
@@ -1650,8 +1794,15 @@ impl Parser {
 mod tests {
     use super::*;
 
-    const BELL: &str =
-        "OPENQASM 2.0;\nqreg q[2];\ncreg c[2];\nh q[0];\ncx q[0],q[1];\nmeasure q -> c;\n";
+    /// OpenQASM 3 bell, arrow-form measurement.
+    const BELL_ARROW: &str = "OPENQASM 3;\nqubit[2] q;\nbit[2] c;\nh q[0];\ncx q[0],q[1];\n\
+                              measure q -> c;\n";
+    /// The same bell, assignment-form measurement.
+    const BELL_ASSIGN: &str = "OPENQASM 3.0;\nqubit[2] q;\nbit[2] c;\nh q[0];\ncx q[0],q[1];\n\
+                               c = measure q;\n";
+    /// The same bell in OpenQASM 2.0, for the dispatch test.
+    const BELL_QASM2: &str = "OPENQASM 2.0;\nqreg q[2];\ncreg c[2];\nh q[0];\ncx q[0],q[1];\n\
+                              measure q -> c;\n";
 
     fn parse(src: &str) -> Program {
         parse_str(src).unwrap_or_else(|e| panic!("parse failed: {e}"))
@@ -1665,6 +1816,25 @@ mod tests {
         })
     }
 
+    fn bell_program() -> Program {
+        Program {
+            qregs: vec![Reg {
+                name: "q".into(),
+                size: 2,
+            }],
+            cregs: vec![Reg {
+                name: "c".into(),
+                size: 2,
+            }],
+            instrs: vec![
+                gate("h", &[], &[0]),
+                gate("cx", &[], &[0, 1]),
+                Instr::Measure { qubit: 0, clbit: 0 },
+                Instr::Measure { qubit: 1, clbit: 1 },
+            ],
+        }
+    }
+
     fn assert_err(src: &str, line: usize, col: usize, substr: &str) {
         let e = parse_str(src).expect_err("expected a parse error");
         assert!(
@@ -1676,35 +1846,110 @@ mod tests {
         assert_eq!((e.line, e.col), (line, col), "wrong position for: {e}");
     }
 
-    // -- positive: structure, broadcasting, builtins --------------------------
+    // -- positive: structure, both measure forms, dispatch ----------------------
 
     #[test]
-    fn bell_exact_program() {
-        let p = parse(BELL);
+    fn bell_arrow_exact_program() {
+        assert_eq!(parse(BELL_ARROW), bell_program());
+    }
+
+    #[test]
+    fn bell_assign_exact_program() {
+        assert_eq!(parse(BELL_ASSIGN), bell_program());
+    }
+
+    #[test]
+    fn dispatch_routes_2_to_old_parser_and_3_here() {
+        // The shared fixture must produce byte-identical Programs through the
+        // single entry point, whichever front end the header selects.
+        let p2 = crate::qasm::parse_str(BELL_QASM2).expect("2.0 fixture");
+        let p3 = crate::qasm::parse_str(BELL_ARROW).expect("3 fixture");
+        assert_eq!(p2, bell_program());
+        assert_eq!(p3, bell_program());
+        assert_eq!(p2, p3);
+        // 'qreg' exists only in the 2.0 grammar: accepting it under a 2.0
+        // header proves the old parser ran; rejecting it under a 3 header
+        // (with the migration hint) proves this parser ran.
+        let e = crate::qasm::parse_str("OPENQASM 3;\nqreg q[1];\n").unwrap_err();
+        assert!(e.msg.contains("OpenQASM 2 syntax"), "msg: {}", e.msg);
+        assert_eq!((e.line, e.col), (2, 1));
+    }
+
+    #[test]
+    fn header_bare_3_and_3_dot_0_accepted() {
+        assert_eq!(parse("OPENQASM 3;\nqubit[1] q;\n").n_qubits(), 1);
+        assert_eq!(parse("OPENQASM 3.0;\nqubit[1] q;\n").n_qubits(), 1);
+    }
+
+    #[test]
+    fn sizeless_declarations_are_single_bits() {
+        let p = parse("OPENQASM 3;\nqubit q;\nbit c;\nh q;\nc = measure q;\n");
         assert_eq!(
             p,
             Program {
                 qregs: vec![Reg {
                     name: "q".into(),
-                    size: 2
+                    size: 1
                 }],
                 cregs: vec![Reg {
                     name: "c".into(),
-                    size: 2
+                    size: 1
                 }],
-                instrs: vec![
-                    gate("h", &[], &[0]),
-                    gate("cx", &[], &[0, 1]),
-                    Instr::Measure { qubit: 0, clbit: 0 },
-                    Instr::Measure { qubit: 1, clbit: 1 },
-                ],
+                instrs: vec![gate("h", &[], &[0]), Instr::Measure { qubit: 0, clbit: 0 }],
             }
         );
     }
 
     #[test]
-    fn broadcast_h_whole_register() {
-        let p = parse("OPENQASM 2.0;\nqreg q[3];\nh q;\n");
+    fn include_stdgates_is_internal() {
+        let p = parse("OPENQASM 3;\ninclude \"stdgates.inc\";\nqubit[1] q;\nh q[0];\n");
+        assert_eq!(p.instrs, vec![gate("h", &[], &[0])]);
+    }
+
+    #[test]
+    fn stdgates_aliases_resolve_to_natives() {
+        let src = "OPENQASM 3;\nqubit[2] q;\nphase(0.5) q[0];\ncphase(0.25) q[0],q[1];\n\
+                   U(0.1,0.2,0.3) q[0];\nCX q[0],q[1];\np(0.75) q[1];\n";
+        let p = parse(src);
+        assert_eq!(
+            p.instrs,
+            vec![
+                gate("p", &[0.5], &[0]),
+                gate("cp", &[0.25], &[0, 1]),
+                gate("u3", &[0.1, 0.2, 0.3], &[0]),
+                gate("cx", &[], &[0, 1]),
+                gate("p", &[0.75], &[1]),
+            ]
+        );
+    }
+
+    #[test]
+    fn block_and_line_comments() {
+        let src = "/* leading\n   block */\nOPENQASM 3; // trailing\nqubit[1] q;\n\
+                   /* mid */ h q[0];\n";
+        let p = parse(src);
+        assert_eq!(p.instrs, vec![gate("h", &[], &[0])]);
+        // ... and through the dispatching entry point (the sniffer must see
+        // through the block comment).
+        assert_eq!(crate::qasm::parse_str(src).unwrap().instrs.len(), 1);
+    }
+
+    #[test]
+    fn declarations_are_order_independent_of_each_other() {
+        // A declaration may appear after other statements, as long as it
+        // precedes its own first use.
+        let p = parse("OPENQASM 3;\nqubit[1] q;\nh q[0];\nbit[1] c;\nc[0] = measure q[0];\n");
+        assert_eq!(
+            p.instrs,
+            vec![gate("h", &[], &[0]), Instr::Measure { qubit: 0, clbit: 0 }]
+        );
+    }
+
+    // -- positive: broadcasting, measurement forms ------------------------------
+
+    #[test]
+    fn broadcast_h_and_cx() {
+        let p = parse("OPENQASM 3;\nqubit[3] q;\nh q;\n");
         assert_eq!(
             p.instrs,
             vec![
@@ -1713,20 +1958,7 @@ mod tests {
                 gate("h", &[], &[2])
             ]
         );
-    }
-
-    #[test]
-    fn broadcast_cx_reg_reg() {
-        let p = parse("OPENQASM 2.0;\nqreg a[2];\nqreg b[2];\ncx a,b;\n");
-        assert_eq!(
-            p.instrs,
-            vec![gate("cx", &[], &[0, 2]), gate("cx", &[], &[1, 3])]
-        );
-    }
-
-    #[test]
-    fn broadcast_cx_reg_bit() {
-        let p = parse("OPENQASM 2.0;\nqreg a[2];\nqreg b[2];\ncx a,b[1];\n");
+        let p = parse("OPENQASM 3;\nqubit[2] a;\nqubit[2] b;\ncx a,b[1];\n");
         assert_eq!(
             p.instrs,
             vec![gate("cx", &[], &[0, 3]), gate("cx", &[], &[1, 3])]
@@ -1734,9 +1966,9 @@ mod tests {
     }
 
     #[test]
-    fn measure_broadcast_reg_to_reg() {
+    fn measure_assign_broadcasts_with_offsets() {
         // 'a' shifts the global offsets of 'q' to make sure they are used.
-        let p = parse("OPENQASM 2.0;\nqreg a[1];\nqreg q[2];\ncreg c[2];\nmeasure q -> c;\n");
+        let p = parse("OPENQASM 3;\nqubit[1] a;\nqubit[2] q;\nbit[2] c;\nc = measure q;\n");
         assert_eq!(
             p.instrs,
             vec![
@@ -1747,45 +1979,99 @@ mod tests {
     }
 
     #[test]
-    fn builtin_u_and_cx() {
-        let p = parse("OPENQASM 2.0;\nqreg q[2];\nU(0.1,0.2,0.3) q[0];\nCX q[0],q[1];\n");
+    fn measure_assign_indexed() {
+        let p = parse("OPENQASM 3;\nqubit[2] q;\nbit[2] c;\nc[1] = measure q[0];\n");
+        assert_eq!(p.instrs, vec![Instr::Measure { qubit: 0, clbit: 1 }]);
+    }
+
+    #[test]
+    fn measure_arrow_indexed() {
+        let p = parse("OPENQASM 3;\nqubit[2] q;\nbit[2] c;\nmeasure q[1] -> c[0];\n");
+        assert_eq!(p.instrs, vec![Instr::Measure { qubit: 1, clbit: 0 }]);
+    }
+
+    #[test]
+    fn reset_broadcasts() {
+        let p = parse("OPENQASM 3;\nqubit[3] q;\nreset q;\nreset q[1];\n");
         assert_eq!(
             p.instrs,
-            vec![gate("u3", &[0.1, 0.2, 0.3], &[0]), gate("cx", &[], &[0, 1])]
+            vec![
+                Instr::Reset { qubit: 0 },
+                Instr::Reset { qubit: 1 },
+                Instr::Reset { qubit: 2 },
+                Instr::Reset { qubit: 1 },
+            ]
         );
     }
 
     #[test]
-    fn include_qelib1_is_internal() {
-        let p = parse("OPENQASM 2.0;\ninclude \"qelib1.inc\";\nqreg q[1];\nh q[0];\n");
-        assert_eq!(p.instrs, vec![gate("h", &[], &[0])]);
+    fn barrier_with_args_dedupes() {
+        let p = parse("OPENQASM 3;\nqubit[2] a;\nqubit[2] b;\nbarrier a[1], b, a;\n");
+        assert_eq!(p.instrs, vec![Instr::Barrier(vec![1, 2, 3, 0])]);
     }
 
     #[test]
-    fn comments_and_whitespace() {
-        let src =
-            "// leading comment\nOPENQASM 2.0; // trailing\n\n  qreg q[1];// c\n h\n q [ 0 ]\n ;\n";
+    fn barrier_no_args_is_all_qubits() {
+        let p = parse("OPENQASM 3;\nqubit[2] a;\nqubit[1] b;\nbarrier;\n");
+        assert_eq!(p.instrs, vec![Instr::Barrier(vec![0, 1, 2])]);
+    }
+
+    // -- positive: if (single statement and block form) -------------------------
+
+    #[test]
+    fn if_single_statement_lowers() {
+        let src = "OPENQASM 3;\nqubit[1] q;\nbit[2] c0;\nbit[3] c1;\nif (c1 == 5) x q[0];\n";
         let p = parse(src);
-        assert_eq!(p.instrs, vec![gate("h", &[], &[0])]);
+        assert_eq!(
+            p.instrs,
+            vec![Instr::If {
+                creg: 1, // index into Program.cregs — NOT the bit offset (2)
+                value: 5,
+                op: Box::new(gate("x", &[], &[0])),
+            }]
+        );
     }
 
     #[test]
-    fn empty_parens_on_parameterless_gate() {
-        let p = parse("OPENQASM 2.0;\nqreg q[1];\nh() q[0];\n");
-        assert_eq!(p.instrs, vec![gate("h", &[], &[0])]);
+    fn if_block_lowers_one_if_per_op() {
+        let src = "OPENQASM 3;\nqubit[2] q;\nbit[2] c;\n\
+                   if (c == 3) {\n  x q[0];\n  c[0] = measure q[0];\n  reset q[1];\n}\n";
+        let p = parse(src);
+        let wrap = |op: Instr| Instr::If {
+            creg: 0,
+            value: 3,
+            op: Box::new(op),
+        };
+        assert_eq!(
+            p.instrs,
+            vec![
+                wrap(gate("x", &[], &[0])),
+                wrap(Instr::Measure { qubit: 0, clbit: 0 }),
+                wrap(Instr::Reset { qubit: 1 }),
+            ]
+        );
     }
 
     #[test]
-    fn qreg_at_the_48_qubit_cap_parses() {
-        let p = parse("OPENQASM 2.0;\nqreg q[48];\n");
-        assert_eq!(p.n_qubits(), 48);
+    fn if_block_broadcasts_inside() {
+        let src = "OPENQASM 3;\nqubit[2] q;\nbit[2] c;\nif (c == 1) { h q; }\n";
+        let p = parse(src);
+        assert_eq!(p.instrs.len(), 2);
+        assert!(matches!(&p.instrs[1], Instr::If { op, .. }
+            if **op == gate("h", &[], &[1])));
     }
 
-    // -- positive: user-defined gates -----------------------------------------
+    #[test]
+    fn if_empty_block_is_noop() {
+        let p = parse("OPENQASM 3;\nqubit[1] q;\nbit[1] c;\nif (c == 1) { }\n");
+        assert!(p.instrs.is_empty());
+    }
+
+    // -- positive: gate definitions ---------------------------------------------
 
     #[test]
     fn user_gate_with_params() {
-        let src = "OPENQASM 2.0;\nqreg q[1];\n\
+        let src = "OPENQASM 3;\nqubit[1] q;\n\
                    gate rot(t,s) a { rz(t/2) a; ry(s*2) a; rz(-t) a; }\n\
                    rot(pi,0.25) q[0];\n";
         let p = parse(src);
@@ -1801,24 +2087,8 @@ mod tests {
     }
 
     #[test]
-    fn user_gate_majority() {
-        let src = "OPENQASM 2.0;\nqreg q[3];\n\
-                   gate maj a,b,c { cx c,b; cx c,a; ccx a,b,c; }\n\
-                   maj q[0],q[1],q[2];\n";
-        let p = parse(src);
-        assert_eq!(
-            p.instrs,
-            vec![
-                gate("cx", &[], &[2, 1]),
-                gate("cx", &[], &[2, 0]),
-                gate("ccx", &[], &[0, 1, 2])
-            ]
-        );
-    }
-
-    #[test]
     fn user_gate_nesting() {
-        let src = "OPENQASM 2.0;\nqreg q[3];\n\
+        let src = "OPENQASM 3;\nqubit[3] q;\n\
                    gate maj a,b,c { cx c,b; cx c,a; ccx a,b,c; }\n\
                    gate twice a,b,c { maj a,b,c; maj c,b,a; }\n\
                    twice q[0],q[1],q[2];\n";
@@ -1837,43 +2107,25 @@ mod tests {
     }
 
     #[test]
-    fn user_gate_broadcasts_like_native() {
-        let src = "OPENQASM 2.0;\nqreg q[2];\ngate flip a { x a; }\nflip q;\n";
+    fn user_gate_broadcasts_and_uses_aliases() {
+        let src = "OPENQASM 3;\nqubit[2] q;\ngate flip a { x a; phase(pi) a; }\nflip q;\n";
         let p = parse(src);
-        assert_eq!(p.instrs, vec![gate("x", &[], &[0]), gate("x", &[], &[1])]);
-    }
-
-    #[test]
-    fn gate_body_barrier_expands() {
-        let src = "OPENQASM 2.0;\nqreg q[2];\n\
-                   gate f a,b { h a; barrier a,b; h b; }\n\
-                   f q[1],q[0];\n";
-        let p = parse(src);
+        let pi = std::f64::consts::PI;
         assert_eq!(
             p.instrs,
             vec![
-                gate("h", &[], &[1]),
-                Instr::Barrier(vec![1, 0]),
-                gate("h", &[], &[0])
+                gate("x", &[], &[0]),
+                gate("p", &[pi], &[0]),
+                gate("x", &[], &[1]),
+                gate("p", &[pi], &[1]),
             ]
         );
     }
 
-    #[test]
-    fn deep_nesting_within_limit() {
-        let mut src = String::from("OPENQASM 2.0;\nqreg q[1];\ngate g0 a { x a; }\n");
-        for i in 1..=100 {
-            src.push_str(&format!("gate g{i} a {{ g{} a; }}\n", i - 1));
-        }
-        src.push_str("g100 q[0];\n");
-        let p = parse(&src);
-        assert_eq!(p.instrs, vec![gate("x", &[], &[0])]);
-    }
-
-    // -- positive: expressions -------------------------------------------------
+    // -- positive: expressions (π, tau/τ, parity with the 2.0 grammar) ----------
 
     fn param_of(expr: &str) -> f64 {
-        let src = format!("OPENQASM 2.0;\nqreg q[1];\nu1({expr}) q[0];\n");
+        let src = format!("OPENQASM 3;\nqubit[1] q;\nu1({expr}) q[0];\n");
         let p = parse(&src);
         match &p.instrs[0] {
             Instr::Gate(g) => g.params[0],
@@ -1882,106 +2134,38 @@ mod tests {
     }
 
     #[test]
-    fn expr_pi_over_2() {
+    fn expr_pi_ascii_and_unicode() {
         assert_eq!(param_of("pi/2"), std::f64::consts::FRAC_PI_2);
+        assert_eq!(param_of("π/2"), std::f64::consts::FRAC_PI_2);
+        assert_eq!(param_of("-π"), -std::f64::consts::PI);
     }
 
     #[test]
-    fn expr_neg_pi() {
-        assert_eq!(param_of("-pi"), -std::f64::consts::PI);
+    fn expr_tau_ascii_and_unicode() {
+        assert_eq!(param_of("tau"), std::f64::consts::TAU);
+        assert_eq!(param_of("τ"), std::f64::consts::TAU);
+        assert_eq!(param_of("τ/4"), std::f64::consts::FRAC_PI_2);
+        assert_eq!(param_of("tau/2"), std::f64::consts::PI);
     }
 
     #[test]
-    fn expr_pow_negative_exponent() {
-        assert_eq!(param_of("2^-3"), 0.125);
-    }
-
-    #[test]
-    fn expr_sin_pi_over_4() {
-        let v = param_of("sin(pi/4)");
-        assert!((v - std::f64::consts::FRAC_PI_4.sin()).abs() < 1e-15);
-    }
-
-    #[test]
-    fn expr_precedence_and_functions() {
+    fn expr_precedence_functions_scientific() {
         assert_eq!(param_of("1+2*3"), 7.0);
         assert_eq!(param_of("2*3^2"), 18.0); // ^ binds tighter than *
-        assert_eq!(param_of("-2^2"), -4.0); // ^ binds tighter than unary -
         assert_eq!(param_of("2^3^2"), 512.0); // ^ is right-associative
-        assert_eq!(param_of("(1+2)*3"), 9.0);
-        let v = param_of("ln(exp(1))+sqrt(4)-cos(0)+tan(0)");
+        assert_eq!(param_of("1.5e2"), 150.0);
+        assert_eq!(param_of(".5"), 0.5);
+        let v = param_of("ln(exp(1))+sqrt(4)-cos(0)+tan(0)+sin(0)");
         assert!((v - 2.0).abs() < 1e-12);
     }
 
-    #[test]
-    fn expr_scientific_notation() {
-        assert_eq!(param_of("1.5e2"), 150.0);
-        assert_eq!(param_of("2E-2"), 0.02);
-        assert_eq!(param_of(".5"), 0.5);
-    }
-
-    // -- positive: measure / reset / barrier / if ------------------------------
+    // -- end-to-end ---------------------------------------------------------------
 
     #[test]
-    fn if_lowers_to_creg_index_not_offset() {
-        let src = "OPENQASM 2.0;\nqreg q[1];\ncreg c0[2];\ncreg c1[3];\nif (c1 == 5) x q[0];\n";
-        let p = parse(src);
-        assert_eq!(
-            p.instrs,
-            vec![Instr::If {
-                creg: 1, // index into Program.cregs — NOT the bit offset (2)
-                value: 5,
-                op: Box::new(gate("x", &[], &[0])),
-            }]
-        );
-    }
-
-    #[test]
-    fn if_broadcasts_measure() {
-        let src = "OPENQASM 2.0;\nqreg q[2];\ncreg c[2];\nif (c == 3) measure q -> c;\n";
-        let p = parse(src);
-        assert_eq!(
-            p.instrs,
-            vec![
-                Instr::If {
-                    creg: 0,
-                    value: 3,
-                    op: Box::new(Instr::Measure { qubit: 0, clbit: 0 }),
-                },
-                Instr::If {
-                    creg: 0,
-                    value: 3,
-                    op: Box::new(Instr::Measure { qubit: 1, clbit: 1 }),
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn reset_broadcasts() {
-        let p = parse("OPENQASM 2.0;\nqreg q[3];\nreset q;\nreset q[1];\n");
-        assert_eq!(
-            p.instrs,
-            vec![
-                Instr::Reset { qubit: 0 },
-                Instr::Reset { qubit: 1 },
-                Instr::Reset { qubit: 2 },
-                Instr::Reset { qubit: 1 },
-            ]
-        );
-    }
-
-    #[test]
-    fn barrier_union_dedupes() {
-        let p = parse("OPENQASM 2.0;\nqreg a[2];\nqreg b[2];\nbarrier a[1], b, a;\n");
-        assert_eq!(p.instrs, vec![Instr::Barrier(vec![1, 2, 3, 0])]);
-    }
-
-    // -- end-to-end -------------------------------------------------------------
-
-    #[test]
-    fn e2e_bell_counts() {
-        let p = parse(BELL);
+    fn e2e_ghz_counts() {
+        let src = "OPENQASM 3.0;\ninclude \"stdgates.inc\";\nqubit[3] q;\nbit[3] c;\n\
+                   h q[0];\ncx q[0], q[1];\ncx q[1], q[2];\nc = measure q;\n";
+        let p = crate::qasm::parse_str(src).expect("dispatch + parse");
         let opts = crate::RunOptions {
             shots: 256,
             seed: Some(1),
@@ -1989,25 +2173,356 @@ mod tests {
         };
         let r = crate::run_program(&p, &opts).expect("run");
         let keys: Vec<&str> = r.counts.0.keys().map(|s| s.as_str()).collect();
-        assert_eq!(keys, ["00", "11"]);
+        assert_eq!(keys, ["000", "111"]);
     }
 
-    // -- negative: every error names the token and carries line/col -------------
+    // -- negative: every unsupported OpenQASM 3 feature is named ----------------
 
     #[test]
-    fn err_unknown_gate() {
+    fn err_for_loop() {
         assert_err(
-            "OPENQASM 2.0;\nqreg q[1];\nfoo q[0];\n",
+            "OPENQASM 3;\nqubit[1] q;\nfor uint i in [0:3] { x q; }\n",
             3,
             1,
-            "unknown gate 'foo'",
+            "for loops are not supported in zeno's OpenQASM 3 subset",
+        );
+    }
+
+    #[test]
+    fn err_while_loop() {
+        assert_err(
+            "OPENQASM 3;\nqubit[1] q;\nbit[1] c;\nwhile (c == 0) { x q; }\n",
+            4,
+            1,
+            "while loops are not supported in zeno's OpenQASM 3 subset",
+        );
+    }
+
+    #[test]
+    fn err_def_subroutine() {
+        assert_err(
+            "OPENQASM 3;\ndef flip(qubit q) -> bit { }\n",
+            2,
+            1,
+            "def subroutines are not supported in zeno's OpenQASM 3 subset",
+        );
+    }
+
+    #[test]
+    fn err_ctrl_modifier() {
+        assert_err(
+            "OPENQASM 3;\nqubit[2] q;\nctrl @ x q[0], q[1];\n",
+            3,
+            1,
+            "gate modifiers ('ctrl@'/'negctrl@'/'inv@'/'pow@') are not supported",
+        );
+    }
+
+    #[test]
+    fn err_negctrl_modifier() {
+        assert_err(
+            "OPENQASM 3;\nqubit[2] q;\nnegctrl @ x q[0], q[1];\n",
+            3,
+            1,
+            "gate modifiers",
+        );
+    }
+
+    #[test]
+    fn err_inv_modifier() {
+        assert_err(
+            "OPENQASM 3;\nqubit[1] q;\ninv @ s q[0];\n",
+            3,
+            1,
+            "gate modifiers",
+        );
+    }
+
+    #[test]
+    fn err_pow_modifier() {
+        assert_err(
+            "OPENQASM 3;\nqubit[1] q;\npow(2) @ x q[0];\n",
+            3,
+            1,
+            "gate modifiers",
+        );
+    }
+
+    #[test]
+    fn err_modifier_under_if() {
+        assert_err(
+            "OPENQASM 3;\nqubit[1] q;\nbit[1] c;\nif (c == 1) inv @ s q[0];\n",
+            4,
+            13,
+            "gate modifiers",
+        );
+    }
+
+    #[test]
+    fn err_delay() {
+        assert_err(
+            "OPENQASM 3;\nqubit[1] q;\ndelay[100ns] q;\n",
+            3,
+            1,
+            "'delay' instructions are not supported in zeno's OpenQASM 3 subset",
+        );
+    }
+
+    #[test]
+    fn err_duration_and_stretch() {
+        assert_err(
+            "OPENQASM 3;\nduration t = 100ns;\n",
+            2,
+            1,
+            "'duration'/'stretch' timing types are not supported",
+        );
+        assert_err(
+            "OPENQASM 3;\nstretch s;\n",
+            2,
+            1,
+            "'duration'/'stretch' timing types are not supported",
+        );
+    }
+
+    #[test]
+    fn err_typed_declarations() {
+        for decl in ["float[64] f;", "int[32] i;", "angle[32] a;"] {
+            let src = format!("OPENQASM 3;\n{decl}\n");
+            assert_err(
+                &src,
+                2,
+                1,
+                "typed classical declarations ('float'/'int'/'uint'/'angle'/'bool'/'complex') \
+                 are not supported",
+            );
+        }
+    }
+
+    #[test]
+    fn err_const_declaration() {
+        assert_err(
+            "OPENQASM 3;\nconst float x = 1.0;\n",
+            2,
+            1,
+            "'const' declarations are not supported in zeno's OpenQASM 3 subset",
+        );
+    }
+
+    #[test]
+    fn err_input_output() {
+        assert_err(
+            "OPENQASM 3;\ninput float theta;\n",
+            2,
+            1,
+            "'input'/'output' parameters are not supported",
+        );
+        assert_err(
+            "OPENQASM 3;\noutput bit result;\n",
+            2,
+            1,
+            "'input'/'output' parameters are not supported",
+        );
+    }
+
+    #[test]
+    fn err_array() {
+        assert_err(
+            "OPENQASM 3;\narray[int[8], 4] a;\n",
+            2,
+            1,
+            "arrays beyond 1-D qubit/bit registers are not supported",
+        );
+    }
+
+    #[test]
+    fn err_switch() {
+        assert_err(
+            "OPENQASM 3;\nbit[2] c;\nswitch (c) { case 1 { } }\n",
+            3,
+            1,
+            "'switch' statements are not supported in zeno's OpenQASM 3 subset",
+        );
+    }
+
+    #[test]
+    fn err_extern() {
+        assert_err(
+            "OPENQASM 3;\nextern f(float) -> float;\n",
+            2,
+            1,
+            "'extern' declarations are not supported in zeno's OpenQASM 3 subset",
+        );
+    }
+
+    #[test]
+    fn err_pragma_both_spellings() {
+        assert_err(
+            "OPENQASM 3;\npragma once\n",
+            2,
+            1,
+            "pragma directives are not supported in zeno's OpenQASM 3 subset",
+        );
+        assert_err(
+            "OPENQASM 3;\n#pragma once\n",
+            2,
+            1,
+            "pragma directives are not supported in zeno's OpenQASM 3 subset",
+        );
+    }
+
+    #[test]
+    fn err_annotation() {
+        assert_err(
+            "OPENQASM 3;\n@reversible\nqubit[1] q;\n",
+            2,
+            1,
+            "annotations ('@name') are not supported in zeno's OpenQASM 3 subset",
+        );
+    }
+
+    #[test]
+    fn err_else_clause() {
+        assert_err(
+            "OPENQASM 3;\nqubit[1] q;\nbit[1] c;\nif (c == 1) x q;\nelse y q;\n",
+            5,
+            1,
+            "'else' clauses are not supported in zeno's OpenQASM 3 subset",
+        );
+    }
+
+    #[test]
+    fn err_range_index() {
+        assert_err(
+            "OPENQASM 3;\nqubit[4] q;\nh q[0:2];\n",
+            3,
+            6,
+            "range indexing on register 'q' is not supported",
+        );
+    }
+
+    // -- negative: migration and malformed input ---------------------------------
+
+    #[test]
+    fn err_qreg_creg_migration() {
+        assert_err(
+            "OPENQASM 3;\nqreg q[2];\n",
+            2,
+            1,
+            "'qreg' is OpenQASM 2 syntax",
+        );
+        assert_err(
+            "OPENQASM 3;\ncreg c[2];\n",
+            2,
+            1,
+            "'creg' is OpenQASM 2 syntax",
+        );
+    }
+
+    #[test]
+    fn err_include_qelib1() {
+        assert_err(
+            "OPENQASM 3;\ninclude \"qelib1.inc\";\n",
+            2,
+            9,
+            "only \"stdgates.inc\" is supported",
+        );
+    }
+
+    #[test]
+    fn err_wrong_version_reaches_this_front_end() {
+        // Direct call (bypassing dispatch): the 3.x front end names what it
+        // accepts.
+        assert_err(
+            "OPENQASM 2.0;\nqubit q;\n",
+            1,
+            10,
+            "unsupported OpenQASM version '2.0'",
+        );
+    }
+
+    #[test]
+    fn err_measure_assign_size_mismatch_names_both() {
+        let e = parse_str("OPENQASM 3;\nqubit[3] q;\nbit[5] c;\nc = measure q;\n")
+            .expect_err("expected a size mismatch");
+        assert!(e.msg.contains("'q' has size 3"), "msg: {}", e.msg);
+        assert!(e.msg.contains("'c' has size 5"), "msg: {}", e.msg);
+        assert_eq!((e.line, e.col), (4, 1));
+    }
+
+    #[test]
+    fn err_measure_arrow_size_mismatch() {
+        assert_err(
+            "OPENQASM 3;\nqubit[3] q;\nbit[2] c;\nmeasure q -> c;\n",
+            4,
+            1,
+            "measure size mismatch",
+        );
+    }
+
+    #[test]
+    fn err_assign_rhs_not_measure() {
+        assert_err(
+            "OPENQASM 3;\nqubit[1] q;\nbit[1] c;\nc = h q;\n",
+            4,
+            5,
+            "expected 'measure' after '='",
+        );
+    }
+
+    #[test]
+    fn err_single_eq_in_if_condition() {
+        assert_err(
+            "OPENQASM 3;\nqubit[1] q;\nbit[1] c;\nif (c = 1) x q[0];\n",
+            4,
+            7,
+            "single '='",
+        );
+    }
+
+    #[test]
+    fn err_barrier_under_if() {
+        assert_err(
+            "OPENQASM 3;\nqubit[1] q;\nbit[1] c;\nif (c == 1) { barrier q; }\n",
+            4,
+            15,
+            "'barrier' is not allowed under 'if'",
+        );
+    }
+
+    #[test]
+    fn err_nested_if() {
+        assert_err(
+            "OPENQASM 3;\nqubit[1] q;\nbit[1] c;\nif (c == 1) { if (c == 1) x q[0]; }\n",
+            4,
+            15,
+            "'if' statements cannot be nested",
+        );
+    }
+
+    #[test]
+    fn err_unclosed_if_block() {
+        assert_err(
+            "OPENQASM 3;\nqubit[1] q;\nbit[1] c;\nif (c == 1) { x q[0];\n",
+            5,
+            1,
+            "unclosed 'if' block",
+        );
+    }
+
+    #[test]
+    fn err_declaration_under_if() {
+        assert_err(
+            "OPENQASM 3;\nqubit[1] q;\nbit[1] c;\nif (c == 1) { qubit r; }\n",
+            4,
+            15,
+            "not a quantum operation",
         );
     }
 
     #[test]
     fn err_unknown_gate_case_hint() {
         assert_err(
-            "OPENQASM 2.0;\nqreg q[1];\nH q[0];\n",
+            "OPENQASM 3;\nqubit[1] q;\nH q[0];\n",
             3,
             1,
             "did you mean 'h'",
@@ -2015,9 +2530,74 @@ mod tests {
     }
 
     #[test]
+    fn err_use_before_declare() {
+        assert_err(
+            "OPENQASM 3;\nh q[0];\nqubit[1] q;\n",
+            2,
+            3,
+            "unknown quantum register 'q'",
+        );
+    }
+
+    #[test]
+    fn err_index_out_of_range() {
+        assert_err(
+            "OPENQASM 3;\nqubit[2] q;\nh q[5];\n",
+            3,
+            5,
+            "index 5 out of range for register 'q' of size 2",
+        );
+    }
+
+    #[test]
+    fn err_duplicate_register() {
+        assert_err(
+            "OPENQASM 3;\nqubit[1] q;\nbit[1] q;\n",
+            3,
+            8,
+            "already declared",
+        );
+    }
+
+    #[test]
+    fn err_missing_semicolon() {
+        assert_err(
+            "OPENQASM 3;\nqubit[1] q;\nh q[0]\nx q[0];\n",
+            4,
+            1,
+            "expected ';'",
+        );
+    }
+
+    #[test]
+    fn err_zero_size_register() {
+        assert_err("OPENQASM 3;\nqubit[0] q;\n", 2, 7, "at least 1");
+    }
+
+    #[test]
+    fn err_too_many_qubits() {
+        assert_err(
+            "OPENQASM 3;\nqubit[40] a;\nqubit[9] b;\n",
+            3,
+            7,
+            "maximum is 48",
+        );
+    }
+
+    #[test]
+    fn err_reserved_word_as_register_name() {
+        assert_err(
+            "OPENQASM 3;\nqubit[2] for;\n",
+            2,
+            10,
+            "'for' is a reserved word",
+        );
+    }
+
+    #[test]
     fn err_broadcast_size_mismatch() {
         assert_err(
-            "OPENQASM 2.0;\nqreg a[2];\nqreg b[3];\ncx a,b;\n",
+            "OPENQASM 3;\nqubit[2] a;\nqubit[3] b;\ncx a,b;\n",
             4,
             1,
             "size mismatch",
@@ -2027,7 +2607,7 @@ mod tests {
     #[test]
     fn err_duplicate_qubit_after_broadcast() {
         assert_err(
-            "OPENQASM 2.0;\nqreg q[2];\ncx q[1],q;\n",
+            "OPENQASM 3;\nqubit[2] q;\ncx q[1],q;\n",
             3,
             1,
             "duplicate qubit 'q[1]'",
@@ -2035,132 +2615,9 @@ mod tests {
     }
 
     #[test]
-    fn err_bad_version() {
-        // Version 3 / 3.0 now dispatches to the OpenQASM 3 front end
-        // (`qasm3`, tested there); every other non-2 version is still
-        // rejected here.
-        assert_err(
-            "OPENQASM 4.0;\nqreg q[1];\n",
-            1,
-            10,
-            "unsupported OpenQASM version '4.0'",
-        );
-    }
-
-    #[test]
-    fn err_unknown_include() {
-        assert_err(
-            "OPENQASM 2.0;\ninclude \"foo.inc\";\n",
-            2,
-            9,
-            "only \"qelib1.inc\" is supported",
-        );
-    }
-
-    #[test]
-    fn err_param_count_mismatch() {
-        assert_err(
-            "OPENQASM 2.0;\nqreg q[1];\nrx q[0];\n",
-            3,
-            1,
-            "expects 1 parameter(s), got 0",
-        );
-    }
-
-    #[test]
-    fn err_index_out_of_range() {
-        assert_err(
-            "OPENQASM 2.0;\nqreg q[2];\nh q[5];\n",
-            3,
-            5,
-            "index 5 out of range for register 'q' of size 2",
-        );
-    }
-
-    #[test]
-    fn err_missing_semicolon() {
-        assert_err(
-            "OPENQASM 2.0;\nqreg q[1];\nh q[0]\nx q[0];\n",
-            4,
-            1,
-            "expected ';'",
-        );
-    }
-
-    #[test]
-    fn err_too_many_qubits() {
-        assert_err(
-            "OPENQASM 2.0;\nqreg a[40];\nqreg b[9];\n",
-            3,
-            8,
-            "maximum is 48",
-        );
-    }
-
-    #[test]
-    fn err_duplicate_register() {
-        assert_err(
-            "OPENQASM 2.0;\nqreg q[1];\ncreg q[1];\n",
-            3,
-            6,
-            "already declared",
-        );
-    }
-
-    #[test]
-    fn err_opaque_unsupported() {
-        assert_err("OPENQASM 2.0;\nopaque foo a;\n", 2, 1, "unsupported");
-    }
-
-    #[test]
-    fn err_measure_size_mismatch() {
-        assert_err(
-            "OPENQASM 2.0;\nqreg q[3];\ncreg c[2];\nmeasure q -> c;\n",
-            4,
-            1,
-            "measure size mismatch",
-        );
-    }
-
-    #[test]
-    fn err_if_indexed_creg() {
-        assert_err(
-            "OPENQASM 2.0;\nqreg q[1];\ncreg c[2];\nif (c[0] == 1) x q[0];\n",
-            4,
-            6,
-            "whole classical register",
-        );
-    }
-
-    #[test]
-    fn err_redefine_native_gate() {
-        assert_err("OPENQASM 2.0;\ngate h a { x a; }\n", 2, 6, "native gate");
-    }
-
-    #[test]
-    fn err_measure_into_quantum_register() {
-        assert_err(
-            "OPENQASM 2.0;\nqreg q[1];\nqreg r[1];\nmeasure q -> r;\n",
-            4,
-            14,
-            "'r' is a quantum register",
-        );
-    }
-
-    #[test]
-    fn err_unknown_identifier_in_expression() {
-        assert_err(
-            "OPENQASM 2.0;\nqreg q[1];\nrx(theta) q[0];\n",
-            3,
-            4,
-            "unknown identifier 'theta'",
-        );
-    }
-
-    #[test]
     fn err_measure_inside_gate_body() {
         assert_err(
-            "OPENQASM 2.0;\ngate f a { measure a -> a; }\n",
+            "OPENQASM 3;\ngate f a { measure a -> a; }\n",
             2,
             12,
             "not allowed inside a gate body",
@@ -2168,29 +2625,19 @@ mod tests {
     }
 
     #[test]
-    fn err_index_inside_gate_body() {
+    fn err_for_inside_gate_body() {
         assert_err(
-            "OPENQASM 2.0;\ngate f a { x a[0]; }\n",
+            "OPENQASM 3;\ngate f a { for uint i in [0:1] { x a; } }\n",
             2,
-            15,
-            "inside a gate body",
+            12,
+            "for loops are not supported",
         );
-    }
-
-    #[test]
-    fn err_zero_size_register() {
-        assert_err("OPENQASM 2.0;\nqreg q[0];\n", 2, 8, "at least 1");
-    }
-
-    #[test]
-    fn err_missing_header() {
-        assert_err("qreg q[1];\n", 1, 1, "expected 'OPENQASM 2.0;'");
     }
 
     #[test]
     fn err_recursive_gate_definition() {
         assert_err(
-            "OPENQASM 2.0;\ngate f a { f a; }\n",
+            "OPENQASM 3;\ngate f a { f a; }\n",
             2,
             12,
             "recursive gate definitions are not allowed",
@@ -2198,8 +2645,19 @@ mod tests {
     }
 
     #[test]
+    fn err_redefine_native_gate_or_alias() {
+        assert_err("OPENQASM 3;\ngate h a { x a; }\n", 2, 6, "native gate");
+        assert_err(
+            "OPENQASM 3;\ngate phase(t) a { rz(t) a; }\n",
+            2,
+            6,
+            "built-in stdgates alias",
+        );
+    }
+
+    #[test]
     fn err_expansion_depth_limit() {
-        let mut src = String::from("OPENQASM 2.0;\nqreg q[1];\ngate g0 a { x a; }\n");
+        let mut src = String::from("OPENQASM 3;\nqubit[1] q;\ngate g0 a { x a; }\n");
         for i in 1..=200 {
             src.push_str(&format!("gate g{i} a {{ g{} a; }}\n", i - 1));
         }
@@ -2214,22 +2672,23 @@ mod tests {
     }
 
     #[test]
-    fn err_single_equals() {
-        assert_err(
-            "OPENQASM 2.0;\nqreg q[1];\ncreg c[1];\nif (c = 1) x q[0];\n",
-            4,
-            7,
-            "'=='",
-        );
+    fn deep_nesting_within_limit() {
+        let mut src = String::from("OPENQASM 3;\nqubit[1] q;\ngate g0 a { x a; }\n");
+        for i in 1..=100 {
+            src.push_str(&format!("gate g{i} a {{ g{} a; }}\n", i - 1));
+        }
+        src.push_str("g100 q[0];\n");
+        let p = parse(&src);
+        assert_eq!(p.instrs, vec![gate("x", &[], &[0])]);
     }
 
     #[test]
-    fn err_barrier_under_if() {
-        assert_err(
-            "OPENQASM 2.0;\nqreg q[1];\ncreg c[1];\nif (c == 1) barrier q;\n",
-            4,
-            13,
-            "'barrier' cannot be the body",
-        );
+    fn err_missing_header() {
+        assert_err("qubit q;\n", 1, 1, "expected 'OPENQASM 3;'");
+    }
+
+    #[test]
+    fn err_unterminated_block_comment() {
+        assert_err("OPENQASM 3;\n/* forever\nqubit q;\n", 2, 1, "unterminated");
     }
 }

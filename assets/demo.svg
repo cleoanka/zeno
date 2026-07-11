@@ -18,7 +18,7 @@
     <text x="28" y="70" fill="#34d399">$</text>
     <text x="46" y="70" fill="#e2e8f0">zeno run examples/grover.qasm --shots 4000 --seed 11</text>
 
-    <text x="28" y="102" fill="#64748b">zeno v0.1.0 · Apple M4 Pro · 12 threads</text>
+    <text x="28" y="102" fill="#64748b">zeno v0.2.0 · Apple M4 Pro · 12 threads</text>
     <text x="28" y="124" fill="#64748b">grover · 3 qubits · 43 gates -&gt; 31 ops · f64 · cpu-f64 · 240 µs</text>
 
     <!-- histogram -->

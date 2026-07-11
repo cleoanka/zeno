@@ -5,10 +5,11 @@ circuit, a **kernel core** that sweeps a state vector, and an **executor**
 that decides how many times and on what hardware the sweeps run.
 
 ```
-QASM 2.0 ──parse──▶ ir::Program ──compile──▶ [COp] ──execute──▶ Counts / statevector
-Rust builder ──────────▲                        │
-                                                ├── CPU backend (f32/f64, rayon + NEON)
-                                                └── Metal backend (f32, unified memory)
+QASM 2.0 / 3 ──parse──▶ ir::Program ──compile──▶ [COp] ──execute──▶ Counts / statevector
+Rust builder ──────────▲                           │        ▲
+                                                   │   noise channels (trajectory, per shot)
+                                                   ├── CPU backend (f32/f64, rayon + explicit NEON)
+                                                   └── Metal backend (f32, unified memory)
 ```
 
 ## Conventions (everything depends on these)
@@ -31,6 +32,15 @@ Amplitudes are stored **split** — `re: Vec<T>`, `im: Vec<T>` (SoA), `T ∈
    contiguous streams, no shuffles. LLVM autovectorizes the kernels with
    `-C target-cpu=native` (see `.cargo/config.toml`).
 2. Probability math (`re² + im²`) reads each stream once.
+
+On top of the autovectorized run-walk loops, the hot kernels carry explicit
+NEON paths (aarch64 only; scalar kernels remain as the fallback *and* the
+test oracle). The vectorization is **bit-exact by design**: each lane holds
+one independent amplitude computed with the identical mul/add/sub expression
+tree — no FMA, no reassociation — verified by `to_bits`-equality tests and
+by the Metal bit-parity suite. The dense fused kernel vectorizes *across
+groups* (lane = group) for the same reason: within-matvec vectorization
+would reorder the accumulation.
 
 Gate kernels are **run-walk** loops: for a target qubit `q` with stride
 `s = 2^q`, the half-index space `0..2^(n-1)` is cut into contiguous chunks
@@ -94,6 +104,26 @@ copies. Gates are encoded lazily into command buffers and flushed only when
 a read (measure/sample/statevector) needs the data. Reductions and sampling
 run on the CPU over the shared buffers; the GPU does what it's good at:
 embarrassingly parallel butterfly sweeps.
+
+## Noise (`src/noise.rs`)
+
+Noise is trajectory-sampled: each shot is an independent stochastic
+evolution, with channels (depolarizing 1q/2q, bit/phase flip, amplitude
+damping, readout flips) applied after each *compiled-as-written* gate — so
+a non-trivial model forces fusion off and per-shot execution. Amplitude
+damping uses the exact jump/no-jump unraveling (jump probability
+`γ·P(q=1)` via `Backend::prob_one`); everything else is a state-independent
+Pauli mixture, which is why trajectories are cheap. Semantics, RNG-stream
+layout and the analytic derivations live in docs/NOISE.md; the suite
+cross-checks qiskit-aer's noise models to TVD < 0.004 at 100k shots.
+
+## Front ends (`src/qasm.rs`, `src/qasm3.rs`)
+
+`qasm::parse_str` sniffs the version header (comment-aware) and routes to
+the OpenQASM 2.0 parser or the OpenQASM 3 subset parser (`qubit[n]`/
+`bit[n]`, both measure forms, `if` blocks, gate defs, `stdgates.inc`
+aliases). Both emit the same `ir::Program`; unsupported OQ3 features are
+rejected with named-feature errors (docs/QASM3.md).
 
 ## Testing strategy
 
