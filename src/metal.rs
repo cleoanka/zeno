@@ -601,6 +601,10 @@ impl Backend for MetalBackend {
             })
             .sum()
     }
+
+    fn finish(&mut self) {
+        self.flush();
+    }
 }
 
 // ---------------------------------------------------------------------------

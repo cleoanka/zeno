@@ -38,6 +38,12 @@ pub enum COp {
     Reset {
         qubit: u32,
     },
+    /// Controlled-X fast path: a pure permutation, executed as a swap
+    /// sweep with zero arithmetic (dense-fused only when `fusion_max` ≥ 2).
+    Cx {
+        control: u32,
+        target: u32,
+    },
     If {
         creg_offset: u32,
         creg_len: u32,
@@ -49,9 +55,11 @@ pub enum COp {
 }
 
 impl COp {
-    fn support(&self) -> Option<&[u32]> {
+    /// Qubits touched by a gate-like op (Unitary/Diagonal/Cx).
+    fn gate_support(&self) -> Option<Vec<u32>> {
         match self {
-            COp::Unitary { qubits, .. } | COp::Diagonal { qubits, .. } => Some(qubits),
+            COp::Unitary { qubits, .. } | COp::Diagonal { qubits, .. } => Some(qubits.clone()),
+            COp::Cx { control, target } => Some(vec![*control, *target]),
             _ => None,
         }
     }
@@ -171,7 +179,7 @@ pub fn compile(p: &Program, opt: &CompileOptions) -> Result<Compiled, crate::Err
 
     let max_fused = ops
         .iter()
-        .filter_map(|o| o.support().map(|s| s.len()))
+        .filter_map(|o| o.gate_support().map(|s| s.len()))
         .max()
         .unwrap_or(0);
 
@@ -308,6 +316,12 @@ fn lower_gate(g: &GateInstr, n_qubits: u32) -> Result<Option<COp>, crate::Error>
     }
     if g.name == "id" || g.name == "u0" {
         return Ok(None);
+    }
+    if g.name == "cx" {
+        return Ok(Some(COp::Cx {
+            control: g.qubits[0],
+            target: g.qubits[1],
+        }));
     }
     let m = gates::build(&g.name, &g.params).ok_or_else(|| {
         crate::Error::InvalidCircuit(format!(
@@ -496,7 +510,8 @@ fn fuse_diagonals(ops: Vec<COp>, diag_max: usize) -> Vec<COp> {
                     }
                 }
             }
-            COp::Unitary { qubits, .. } => {
+            COp::Unitary { .. } | COp::Cx { .. } => {
+                let qubits = op.gate_support().expect("gate-like op");
                 if let Some((sup, _, _)) = &cur {
                     if qubits.iter().any(|q| sup.contains(q)) {
                         // Group can't move past this op: emit it first.
@@ -543,6 +558,13 @@ fn fuse_general(ops: Vec<COp>, kmax: usize) -> Vec<COp> {
                 }
                 (qubits.clone(), m)
             }
+            COp::Cx { control, target } => {
+                let mat = match gates::build("cx", &[]).expect("cx is native") {
+                    gates::GateMatrix::Unitary(m) => m,
+                    _ => unreachable!(),
+                };
+                permute_unitary_to_sorted(&[*control, *target], &mat)
+            }
             _ => unreachable!(),
         }
     };
@@ -561,8 +583,7 @@ fn fuse_general(ops: Vec<COp>, kmax: usize) -> Vec<COp> {
     };
 
     for op in ops {
-        let fusable = matches!(&op, COp::Unitary { qubits, .. } | COp::Diagonal { qubits, .. }
-            if qubits.len() <= kmax);
+        let fusable = op.gate_support().is_some_and(|sup| sup.len() <= kmax);
         if !fusable {
             flush(&mut cur, &mut out);
             out.push(op);

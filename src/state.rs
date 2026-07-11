@@ -260,6 +260,31 @@ pub fn apply_kq<T: Real>(st: &mut StateVec<T>, qs: &[u32], m: &[C64]) {
         });
 }
 
+/// Controlled-X as a pure permutation: swap the target pair inside the
+/// control=1 half. Zero arithmetic, touches half the state — ~4x cheaper
+/// than the dense 2-qubit path.
+pub fn apply_cx<T: Real>(st: &mut StateVec<T>, control: u32, target: u32) {
+    debug_assert_ne!(control, target);
+    let qs = [control.min(target), control.max(target)];
+    let coff = 1usize << control;
+    let toff = 1usize << target;
+    let groups = st.len() >> 2;
+    let re = SendPtr(st.re.as_mut_ptr());
+    let im = SendPtr(st.im.as_mut_ptr());
+    task_ranges(groups)
+        .into_par_iter()
+        .for_each(|(g0, g1)| unsafe {
+            let re = re.ptr();
+            let im = im.ptr();
+            for g in g0..g1 {
+                let a = insert_zeros(g, &qs) | coff;
+                let b = a | toff;
+                std::ptr::swap(re.add(a), re.add(b));
+                std::ptr::swap(im.add(a), im.add(b));
+            }
+        });
+}
+
 /// Apply a diagonal unitary given its diagonal (length `2^k`) on sorted
 /// distinct qubits `qs`. Single O(2^n) sweep.
 pub fn apply_diag<T: Real>(st: &mut StateVec<T>, qs: &[u32], d: &[C64]) {
@@ -455,6 +480,24 @@ mod tests {
         apply_kq(&mut b, &[0, 2], &mat("cz"));
         for i in 0..8 {
             assert!((a.amp(i) - b.amp(i)).norm() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn apply_cx_matches_dense() {
+        for (c, t) in [(0u32, 2u32), (2, 0), (1, 2), (2, 1)] {
+            let mut a = StateVec::<f64>::zero_state(3);
+            for q in 0..3 {
+                apply_1q(&mut a, q, &mat("h"));
+            }
+            apply_1q(&mut a, 1, &mat("t"));
+            let mut b = a.clone();
+            apply_cx(&mut a, c, t);
+            let (qs, m) = crate::compiler::permute_unitary_to_sorted(&[c, t], &mat("cx"));
+            apply_kq(&mut b, &qs, &m);
+            for i in 0..8 {
+                assert!((a.amp(i) - b.amp(i)).norm() < 1e-12, "cx({c},{t}) idx {i}");
+            }
         }
     }
 

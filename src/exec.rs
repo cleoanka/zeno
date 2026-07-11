@@ -121,12 +121,27 @@ pub trait Backend: Send {
     fn name(&self) -> &'static str;
     fn apply_unitary(&mut self, qs: &[u32], mat: &[C64]);
     fn apply_diagonal(&mut self, qs: &[u32], d: &[C64]);
+    /// Controlled-X fast path. The default falls back to the dense
+    /// 2-qubit unitary; CPU overrides with a pure swap sweep.
+    fn apply_cx(&mut self, control: u32, target: u32) {
+        let mat = match crate::gates::build("cx", &[]).expect("cx is native") {
+            crate::gates::GateMatrix::Unitary(m) => m,
+            _ => unreachable!(),
+        };
+        let (qs, m) = crate::compiler::permute_unitary_to_sorted(&[control, target], &mat);
+        self.apply_unitary(&qs, &m);
+    }
     /// Measure qubit `q` using the uniform draw `u ∈ [0,1)`; collapses.
     fn measure(&mut self, q: u32, u: f64) -> bool;
     fn reset_all(&mut self);
     fn sample(&mut self, shots: usize, seed: u64) -> Vec<u64>;
     fn statevector(&mut self) -> Vec<C64>;
     fn norm_sqr(&mut self) -> f64;
+    /// Wait for all queued work to complete. No-op on synchronous
+    /// backends; the Metal backend commits + waits here so reported sim
+    /// times always include the actual GPU work, even when nothing is
+    /// read back (e.g. measurement-free circuits).
+    fn finish(&mut self) {}
 }
 
 pub struct CpuBackend<T: Real> {
@@ -156,6 +171,10 @@ impl<T: Real> Backend for CpuBackend<T> {
 
     fn apply_diagonal(&mut self, qs: &[u32], d: &[C64]) {
         state::apply_diag(&mut self.st, qs, d);
+    }
+
+    fn apply_cx(&mut self, control: u32, target: u32) {
+        state::apply_cx(&mut self.st, control, target);
     }
 
     fn measure(&mut self, q: u32, u: f64) -> bool {
@@ -344,6 +363,7 @@ fn apply_op(be: &mut dyn Backend, op: &COp) {
     match op {
         COp::Unitary { qubits, mat } => be.apply_unitary(qubits, mat),
         COp::Diagonal { qubits, diag } => be.apply_diagonal(qubits, diag),
+        COp::Cx { control, target } => be.apply_cx(*control, *target),
         _ => unreachable!("non-unitary op in static body"),
     }
 }
@@ -359,6 +379,7 @@ fn run_sampled(
     for op in &c.ops {
         apply_op(be.as_mut(), op);
     }
+    be.finish();
 
     let statevector = if opts.want_statevector {
         Some(be.statevector())
@@ -470,6 +491,7 @@ fn exec_dynamic_op(be: &mut dyn Backend, op: &COp, rng: &mut Xoshiro256PlusPlus,
     match op {
         COp::Unitary { qubits, mat } => be.apply_unitary(qubits, mat),
         COp::Diagonal { qubits, diag } => be.apply_diagonal(qubits, diag),
+        COp::Cx { control, target } => be.apply_cx(*control, *target),
         COp::Measure { qubit, clbit } => {
             let bit = be.measure(*qubit, rng.gen::<f64>()) as u64;
             *clbits = (*clbits & !(1u64 << clbit)) | (bit << clbit);

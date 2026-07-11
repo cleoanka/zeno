@@ -943,6 +943,7 @@ fn op_kind(op: &COp) -> &'static str {
     match op {
         COp::Unitary { .. } => "unitary",
         COp::Diagonal { .. } => "diagonal",
+        COp::Cx { .. } => "cx",
         COp::Measure { .. } => "measure",
         COp::Reset { .. } => "reset",
         COp::If { .. } => "if",
@@ -953,6 +954,7 @@ fn op_kind(op: &COp) -> &'static str {
 fn op_qubits(op: &COp) -> Vec<u32> {
     match op {
         COp::Unitary { qubits, .. } | COp::Diagonal { qubits, .. } => qubits.clone(),
+        COp::Cx { control, target } => vec![*control, *target],
         COp::Measure { qubit, .. } | COp::Reset { qubit } => vec![*qubit],
         COp::If { inner, .. } => op_qubits(inner),
         COp::Barrier => vec![],
@@ -989,6 +991,7 @@ fn op_detail(op: &COp, cregs: &[Reg]) -> String {
             format!("{dim}×{dim} matrix")
         }
         COp::Diagonal { diag, .. } => format!("{}-entry table", diag.len()),
+        COp::Cx { .. } => "permutation sweep".to_string(),
         COp::Measure { clbit, .. } => format!("-> {}", clbit_label(cregs, *clbit)),
         COp::Reset { .. } => "-> |0⟩".to_string(),
         COp::If {
