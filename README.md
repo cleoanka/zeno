@@ -1,22 +1,29 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="kuantum" width="640">
+  <img src="assets/logo.svg" alt="zeno" width="640">
 </p>
 
 <p align="center">
-  <a href="https://github.com/cleoanka/kuantum/actions/workflows/ci.yml"><img src="https://github.com/cleoanka/kuantum/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/cleoanka/zeno/actions/workflows/ci.yml"><img src="https://github.com/cleoanka/zeno/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/rust-1.80%2B-orange?logo=rust" alt="Rust 1.80+">
   <img src="https://img.shields.io/badge/platform-Apple%20Silicon-black?logo=apple" alt="Apple Silicon">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT">
 </p>
 
-**kuantum** is a quantum circuit simulator, compiler and runner built for one
+**zeno** is a quantum circuit simulator, compiler and runner built for one
 platform and tuned like it: Apple Silicon. It matches or beats qiskit-aer on
 the CPU at double precision, and its Metal backend runs deep circuits **4–5×
 faster** than aer on the same machine — while every amplitude is
 cross-validated against an independent reference and against qiskit itself.
 
+> **Why "Zeno"?** After Zeno of Elea, the Greek philosopher who argued that
+> if you slice time finely enough, a flying arrow never moves — and after the
+> **quantum Zeno effect**, where observing a quantum system often enough
+> freezes its evolution. A simulator is exactly that privileged observer: it
+> can stop quantum motion at any instant, inspect every amplitude, and let
+> the arrow fly again.
+
 <p align="center">
-  <img src="assets/demo.svg" alt="kuantum running Grover's algorithm" width="720">
+  <img src="assets/demo.svg" alt="zeno running Grover's algorithm" width="720">
 </p>
 
 ## Highlights
@@ -30,7 +37,7 @@ cross-validated against an independent reference and against qiskit itself.
   memory: the GPU sweeps gates, the CPU samples the same bytes — zero copies.
   Same seed and fusion setting ⇒ **bit-identical counts** to the CPU
   backend (tested, including across the command-buffer rollover path).
-- **RAM-aware by design.** `kuantum info` tells you exactly how many qubits
+- **RAM-aware by design.** `zeno info` tells you exactly how many qubits
   your machine holds; runs auto-select f64/f32 per budget and refuse
   politely (with the capacity table) instead of swap-storming. 24 GB ⇒ 30
   qubits f64 / 31 qubits f32.
@@ -45,10 +52,10 @@ cross-validated against an independent reference and against qiskit itself.
 ## Benchmarks
 
 <p align="center">
-  <img src="assets/benchmark.svg" alt="benchmark: kuantum vs qiskit-aer on M4 Pro" width="720">
+  <img src="assets/benchmark.svg" alt="benchmark: zeno vs qiskit-aer on M4 Pro" width="720">
 </p>
 
-| circuit (same .qasm file) | qiskit-aer f64 | kuantum cpu f64 | kuantum metal f32 |
+| circuit (same .qasm file) | qiskit-aer f64 | zeno cpu f64 | zeno metal f32 |
 |---|---|---|---|
 | random 20q · depth 12 | 64 ms | **40 ms** | — |
 | random 26q · depth 12 | 3.83 s | 3.86 s | **0.95 s** |
@@ -64,8 +71,8 @@ defaults.
 ## Install
 
 ```sh
-git clone https://github.com/cleoanka/kuantum
-cd kuantum
+git clone https://github.com/cleoanka/zeno
+cd zeno
 cargo install --path .              # CPU backend
 cargo install --path . --features metal   # + Metal GPU backend
 ```
@@ -77,11 +84,11 @@ exact chip.
 ## Use it in 10 seconds
 
 ```sh
-kuantum run examples/bell.qasm --shots 1000
+zeno run examples/bell.qasm --shots 1000
 ```
 
 ```
-kuantum v0.1.0 · Apple M4 Pro · 12 threads
+zeno v0.1.0 · Apple M4 Pro · 12 threads
 bell · 2 qubits · 2 gates -> 2 ops · f64 · cpu-f64 · 184 µs
 
   00  ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇  502   50.2%
@@ -93,12 +100,12 @@ seed 0x000000000000002a (reproduce with --seed)
 The four subcommands:
 
 ```sh
-kuantum run circuit.qasm [--shots N] [--seed S] [--precision f32|f64]
+zeno run circuit.qasm [--shots N] [--seed S] [--precision f32|f64]
         [--backend cpu|metal] [--fusion K] [--mem-limit 8g] [--threads N]
         [--statevector] [--json]     # simulate + histogram
-kuantum info                         # your machine's qubit capacity
-kuantum bench --qubits 20,24,26      # reproducible throughput sweep
-kuantum compile circuit.qasm         # see what the fusion compiler did
+zeno info                         # your machine's qubit capacity
+zeno bench --qubits 20,24,26      # reproducible throughput sweep
+zeno compile circuit.qasm         # see what the fusion compiler did
 ```
 
 `--json` everywhere for scripting; every run prints its seed so any
@@ -107,8 +114,8 @@ histogram is replayable bit-for-bit.
 ### How many qubits do I get?
 
 State vectors double per qubit: `2ⁿ` amplitudes × 8 B (f32) or 16 B (f64).
-`kuantum info` computes it live; the default budget is 75% of RAM
-(`--mem-limit` / `KUANTUM_MEM_BYTES` override):
+`zeno info` computes it live; the default budget is 75% of RAM
+(`--mem-limit` / `ZENO_MEM_BYTES` override):
 
 | RAM | f64 | f32 |
 |---|---|---|
@@ -118,13 +125,13 @@ State vectors double per qubit: `2ⁿ` amplitudes × 8 B (f32) or 16 B (f64).
 | 64 GB | 31 | 32 |
 | 128 GB | 32 | 33 |
 
-If f64 doesn't fit but f32 does, kuantum switches automatically and tells
+If f64 doesn't fit but f32 does, zeno switches automatically and tells
 you. A 29-qubit GHZ (8 GiB of amplitudes) runs end-to-end in ~9 s.
 
 ## Rust API
 
 ```rust
-use kuantum::{Circuit, Simulator};
+use zeno::{Circuit, Simulator};
 
 let mut c = Circuit::new(3);
 c.h(0).cx(0, 1).cx(1, 2).measure_all();          // GHZ

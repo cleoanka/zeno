@@ -5,7 +5,7 @@
 // bits are perfectly correlated shot-to-shot.
 // Expected output: only the keys "00" and "11", ~50% each (never "01"/"10").
 //
-// Run: kuantum run examples/bell.qasm --shots 4000 --seed 11
+// Run: zeno run examples/bell.qasm --shots 4000 --seed 11
 
 OPENQASM 2.0;
 include "qelib1.inc";

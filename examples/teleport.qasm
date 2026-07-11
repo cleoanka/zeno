@@ -7,7 +7,7 @@
 // Expected output: four keys "1 0 0", "1 0 1", "1 1 0", "1 1 1", ~25% each.
 // (Key = "out m1 m0": last-declared creg leftmost; out is always 1.)
 //
-// Run: kuantum run examples/teleport.qasm --shots 4000 --seed 11
+// Run: zeno run examples/teleport.qasm --shots 4000 --seed 11
 
 OPENQASM 2.0;
 include "qelib1.inc";

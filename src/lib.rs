@@ -1,4 +1,4 @@
-//! # kuantum
+//! # zeno
 //!
 //! Apple Silicon-native quantum circuit **simulator, compiler and runner**.
 //!
@@ -11,7 +11,7 @@
 //! - OpenQASM 2.0 front end and a plain Rust builder API.
 //!
 //! ```
-//! use kuantum::{Circuit, Simulator};
+//! use zeno::{Circuit, Simulator};
 //!
 //! let mut bell = Circuit::new(2);
 //! bell.h(0).cx(0, 1).measure_all();
@@ -120,7 +120,7 @@ pub fn human_bytes(b: u128) -> String {
 /// Builder-style front door around [`RunOptions`].
 ///
 /// ```
-/// use kuantum::{Circuit, Simulator, Precision};
+/// use zeno::{Circuit, Simulator, Precision};
 /// let mut c = Circuit::new(3);
 /// c.h(0).cx(0, 1).cx(1, 2).measure_all();
 /// let r = Simulator::new()

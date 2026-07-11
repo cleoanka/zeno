@@ -1,7 +1,7 @@
 //! Ergonomic circuit builder (single `q` register, single `c` register).
 //!
 //! ```
-//! use kuantum::{Circuit, Simulator};
+//! use zeno::{Circuit, Simulator};
 //!
 //! let mut c = Circuit::new(2);
 //! c.h(0).cx(0, 1).measure_all();
@@ -148,7 +148,7 @@ pub fn qft(n: u32) -> Circuit {
 }
 
 /// Seeded random circuit: `depth` layers of Haar-ish single-qubit rotations
-/// followed by a shifting CX ladder. Used by `kuantum bench` and the tests.
+/// followed by a shifting CX ladder. Used by `zeno bench` and the tests.
 pub fn random_circuit(n: u32, depth: u32, seed: u64) -> Circuit {
     use rand::{Rng, SeedableRng};
     let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(seed);

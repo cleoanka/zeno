@@ -1,7 +1,7 @@
-# OpenQASM 2.0 support in kuantum
+# OpenQASM 2.0 support in zeno
 
-The front end (`src/qasm.rs`, `kuantum::qasm::{parse_str, parse_file}`) is a
-hand-written lexer + recursive-descent parser producing `kuantum::ir::Program`.
+The front end (`src/qasm.rs`, `zeno::qasm::{parse_str, parse_file}`) is a
+hand-written lexer + recursive-descent parser producing `zeno::ir::Program`.
 This document is the exact support matrix of what is implemented — no more, no
 less.
 
@@ -122,7 +122,7 @@ Deliberate, all on the permissive side except where noted:
    primitives; everything else comes from `qelib1.inc`. Here the full native
    table above is always in scope, and `include "qelib1.inc";` is a no-op
    satisfied internally (it is *not* re-parsed from an embedded copy).
-   Consequently kuantum's `rz`, `u1`, … are the crate's native definitions
+   Consequently zeno's `rz`, `u1`, … are the crate's native definitions
    (qiskit conventions), not the textual qelib1 macro expansions.
 2. **Only `qelib1.inc` may be included.** Any other path is an error; there is
    no filesystem access from `include`.

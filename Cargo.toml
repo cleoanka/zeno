@@ -1,11 +1,11 @@
 [package]
-name = "kuantum"
+name = "zeno"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"
 description = "Apple Silicon-native quantum circuit simulator, compiler and runner"
 license = "MIT"
-repository = "https://github.com/cleoanka/kuantum"
+repository = "https://github.com/cleoanka/zeno"
 readme = "README.md"
 keywords = ["quantum", "simulator", "qasm", "apple-silicon", "metal"]
 categories = ["science", "simulation", "command-line-utilities"]

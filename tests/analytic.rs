@@ -10,9 +10,9 @@
 //! instruction stream is replayed through a tiny local interpreter and only
 //! then pinned to the closed-form DFT.
 
-use kuantum::compiler::{compile, CompileOptions};
-use kuantum::ir::{GateInstr, Instr, Program, Reg};
-use kuantum::{qft, random_circuit, Circuit, RunOptions, Simulator, C64};
+use zeno::compiler::{compile, CompileOptions};
+use zeno::ir::{GateInstr, Instr, Program, Reg};
+use zeno::{qft, random_circuit, Circuit, RunOptions, Simulator, C64};
 
 const PI: f64 = std::f64::consts::PI;
 
@@ -205,7 +205,7 @@ fn qft5_matches_reference_replay_and_dft_formula() {
             .collect();
         p.instrs.splice(0..0, prefix);
 
-        let r = kuantum::run_program(&p, &statevector_opts()).unwrap();
+        let r = zeno::run_program(&p, &statevector_opts()).unwrap();
         let sv = r.statevector.unwrap();
 
         // Replay the exact same instruction stream independently.
@@ -291,7 +291,7 @@ fn teleportation_transfers_u3_state() {
         seed: Some(7),
         ..Default::default()
     };
-    let r = kuantum::run_program(&p, &opts).unwrap();
+    let r = zeno::run_program(&p, &opts).unwrap();
     assert_eq!(r.counts.total(), shots);
 
     // Marginal of the output qubit: P(1) = sin²(θ/2), independent of the
@@ -365,7 +365,7 @@ fn mid_circuit_measurement_statistics() {
 fn self_inverse_pairs_cancel_to_identity() {
     let mut c = Circuit::new(3);
     c.h(0).h(0).cx(0, 1).cx(0, 1);
-    let r = kuantum::run_program(&c.to_program(), &statevector_opts()).unwrap();
+    let r = zeno::run_program(&c.to_program(), &statevector_opts()).unwrap();
     assert_eq!(r.stats.input_gates, 4);
     assert_eq!(r.stats.cancelled, 4, "h h and cx cx must cancel");
     assert_eq!(r.stats.output_ops, 0);
@@ -378,7 +378,7 @@ fn self_inverse_pairs_cancel_to_identity() {
 fn barrier_blocks_cancellation_but_identity_holds_numerically() {
     let mut c = Circuit::new(2);
     c.h(0).barrier().h(0).cx(0, 1).barrier().cx(0, 1);
-    let r = kuantum::run_program(&c.to_program(), &statevector_opts()).unwrap();
+    let r = zeno::run_program(&c.to_program(), &statevector_opts()).unwrap();
     assert_eq!(r.stats.cancelled, 0, "barriers must fence cancellation");
     assert!(r.stats.output_ops >= 1, "gates must actually execute");
     let sv = r.statevector.unwrap();
@@ -396,7 +396,7 @@ fn empty_one_qubit_and_measure_only_circuits() {
     let c = Circuit::new(3);
     let mut opts = statevector_opts();
     opts.shots = 100;
-    let r = kuantum::run_program(&c.to_program(), &opts).unwrap();
+    let r = zeno::run_program(&c.to_program(), &opts).unwrap();
     assert!(r.counts.is_empty(), "no measurements → no counts");
     let sv = r.statevector.unwrap();
     assert_eq!(sv.len(), 8);
@@ -451,15 +451,15 @@ fn determinism_dynamic_path() {
         seed: Some(123),
         ..Default::default()
     };
-    let a = kuantum::run_program(&p, &opts).unwrap();
-    let b = kuantum::run_program(&p, &opts).unwrap();
+    let a = zeno::run_program(&p, &opts).unwrap();
+    let b = zeno::run_program(&p, &opts).unwrap();
     assert_eq!(a.counts, b.counts, "same seed must reproduce counts");
 
     let opts1 = RunOptions {
         threads: Some(1),
         ..opts
     };
-    let t1 = kuantum::run_program(&p, &opts1).unwrap();
+    let t1 = zeno::run_program(&p, &opts1).unwrap();
     assert_eq!(
         a.counts, t1.counts,
         "threads=1 must match the default thread count"

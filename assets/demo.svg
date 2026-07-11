@@ -12,13 +12,13 @@
   <circle cx="24" cy="19" r="6" fill="#ff5f57"/>
   <circle cx="44" cy="19" r="6" fill="#febc2e"/>
   <circle cx="64" cy="19" r="6" fill="#28c840"/>
-  <text x="380" y="24" font-size="13" fill="#64748b" text-anchor="middle">kuantum — zsh</text>
+  <text x="380" y="24" font-size="13" fill="#64748b" text-anchor="middle">zeno — zsh</text>
 
   <g font-size="14.5">
     <text x="28" y="70" fill="#34d399">$</text>
-    <text x="46" y="70" fill="#e2e8f0">kuantum run examples/grover.qasm --shots 4000 --seed 11</text>
+    <text x="46" y="70" fill="#e2e8f0">zeno run examples/grover.qasm --shots 4000 --seed 11</text>
 
-    <text x="28" y="102" fill="#64748b">kuantum v0.1.0 · Apple M4 Pro · 12 threads</text>
+    <text x="28" y="102" fill="#64748b">zeno v0.1.0 · Apple M4 Pro · 12 threads</text>
     <text x="28" y="124" fill="#64748b">grover · 3 qubits · 43 gates -&gt; 31 ops · f64 · cpu-f64 · 240 µs</text>
 
     <!-- histogram -->

@@ -8,7 +8,7 @@
 // Expected output: the single key "10110001", 100% of shots (deterministic;
 // the key prints c[7] leftmost .. c[0] rightmost, matching q[7]..q[0]).
 //
-// Run: kuantum run examples/qft.qasm --shots 4000 --seed 11
+// Run: zeno run examples/qft.qasm --shots 4000 --seed 11
 
 OPENQASM 2.0;
 include "qelib1.inc";

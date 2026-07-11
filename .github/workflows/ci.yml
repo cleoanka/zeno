@@ -27,5 +27,5 @@ jobs:
       - name: Release smoke (bell)
         run: |
           cargo build --release
-          ./target/release/kuantum info
-          ./target/release/kuantum run examples/bell.qasm --shots 1000 --seed 1
+          ./target/release/zeno info
+          ./target/release/zeno run examples/bell.qasm --shots 1000 --seed 1

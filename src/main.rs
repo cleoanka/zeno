@@ -1,4 +1,4 @@
-//! `kuantum` command-line interface.
+//! `zeno` command-line interface.
 //!
 //! Four subcommands over the library in `src/lib.rs`:
 //!
@@ -12,27 +12,27 @@
 //! `--json` output is a single plain JSON object with `schema_version: 1`.
 
 use clap::{Parser, Subcommand, ValueEnum};
-use kuantum::compiler::{self, COp, CompileOptions};
-use kuantum::ir::Reg;
-use kuantum::{human_bytes, mem, BackendChoice, Counts, Precision, RunOptions, RunResult};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
+use zeno::compiler::{self, COp, CompileOptions};
+use zeno::ir::Reg;
+use zeno::{human_bytes, mem, BackendChoice, Counts, Precision, RunOptions, RunResult};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
 #[command(
-    name = "kuantum",
+    name = "zeno",
     version,
     about = "Apple Silicon-native quantum circuit simulator, compiler and runner",
     after_help = "Examples:\n  \
-        kuantum run bell.qasm --shots 4096\n  \
-        kuantum run qft.qasm --statevector --seed 7\n  \
-        kuantum info\n  \
-        kuantum bench --qubits 20,24 --compare-fusion\n  \
-        kuantum compile grover.qasm"
+        zeno run bell.qasm --shots 4096\n  \
+        zeno run qft.qasm --statevector --seed 7\n  \
+        zeno info\n  \
+        zeno bench --qubits 20,24 --compare-fusion\n  \
+        zeno compile grover.qasm"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -335,14 +335,14 @@ fn fmt_duration(d: Duration) -> String {
 
 /// Read + parse a QASM file, prefixing I/O errors with the path (a bare
 /// "No such file or directory" helps nobody).
-fn parse_qasm(path: &std::path::Path) -> Result<kuantum::Program, kuantum::Error> {
+fn parse_qasm(path: &std::path::Path) -> Result<zeno::Program, zeno::Error> {
     let src = std::fs::read_to_string(path).map_err(|e| {
-        kuantum::Error::Io(std::io::Error::new(
+        zeno::Error::Io(std::io::Error::new(
             e.kind(),
             format!("{}: {e}", path.display()),
         ))
     })?;
-    Ok(kuantum::qasm::parse_str(&src)?)
+    Ok(zeno::qasm::parse_str(&src)?)
 }
 
 fn chip_name() -> String {
@@ -358,7 +358,7 @@ fn chip_name() -> String {
 
 fn machine_header(threads: usize, sty: &Style) -> String {
     sty.dim(&format!(
-        "kuantum v{VERSION} · {} · {threads} threads",
+        "zeno v{VERSION} · {} · {threads} threads",
         chip_name()
     ))
 }
@@ -398,10 +398,10 @@ fn print_table(headers: &[&str], rows: &[Vec<String>], right: &[bool], sty: &Sty
 }
 
 // ---------------------------------------------------------------------------
-// kuantum run
+// zeno run
 // ---------------------------------------------------------------------------
 
-fn cmd_run(a: &RunArgs) -> Result<(), kuantum::Error> {
+fn cmd_run(a: &RunArgs) -> Result<(), zeno::Error> {
     let program = parse_qasm(&a.file)?;
     let n_qubits = program.n_qubits();
     // In human mode only small states are printed, so skip the copy above 8
@@ -418,7 +418,7 @@ fn cmd_run(a: &RunArgs) -> Result<(), kuantum::Error> {
         want_statevector: want_sv,
         threads: a.threads,
     };
-    let r = kuantum::run_program(&program, &opts)?;
+    let r = zeno::run_program(&program, &opts)?;
     if a.json {
         print_run_json(a, &r);
     } else {
@@ -580,7 +580,7 @@ fn print_statevector_human(r: &RunResult, sty: &Style) {
 }
 
 // ---------------------------------------------------------------------------
-// kuantum info
+// zeno info
 // ---------------------------------------------------------------------------
 
 const DEFAULT_FRACTION: f64 = 0.75;
@@ -603,7 +603,7 @@ fn capacity(budget: u64, precision: Precision) -> PrecisionCapacity {
     }
 }
 
-fn cmd_info(json: bool) -> Result<(), kuantum::Error> {
+fn cmd_info(json: bool) -> Result<(), zeno::Error> {
     let chip = chip_name();
     let cores = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
@@ -637,7 +637,7 @@ fn cmd_info(json: bool) -> Result<(), kuantum::Error> {
             "budget_bytes": budget,
             "budget_fraction": DEFAULT_FRACTION,
             "precisions": precisions,
-            "overrides": ["--mem-limit", "KUANTUM_MEM_BYTES"],
+            "overrides": ["--mem-limit", "ZENO_MEM_BYTES"],
         });
         println!(
             "{}",
@@ -647,7 +647,7 @@ fn cmd_info(json: bool) -> Result<(), kuantum::Error> {
     }
 
     let sty = Style::detect();
-    println!("{}", sty.dim(&format!("kuantum v{VERSION} · {chip}")));
+    println!("{}", sty.dim(&format!("zeno v{VERSION} · {chip}")));
     println!("  cores   {cores}");
     let free = available
         .map(|b| human_bytes(b as u128))
@@ -680,13 +680,13 @@ fn cmd_info(json: bool) -> Result<(), kuantum::Error> {
     println!();
     println!(
         "{}",
-        sty.dim("--mem-limit and KUANTUM_MEM_BYTES override the budget")
+        sty.dim("--mem-limit and ZENO_MEM_BYTES override the budget")
     );
     Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// kuantum bench
+// zeno bench
 // ---------------------------------------------------------------------------
 
 enum BenchRow {
@@ -707,7 +707,7 @@ enum BenchRow {
     },
 }
 
-fn cmd_bench(a: &BenchArgs) -> Result<(), kuantum::Error> {
+fn cmd_bench(a: &BenchArgs) -> Result<(), zeno::Error> {
     let budget = mem::budget_bytes(None, DEFAULT_FRACTION);
     // Auto precision falls back to f32, so a size only truly exceeds the
     // budget when even the smallest representation does.
@@ -723,7 +723,7 @@ fn cmd_bench(a: &BenchArgs) -> Result<(), kuantum::Error> {
             rows.push(BenchRow::Skipped { n, needed, budget });
             continue;
         }
-        let program = kuantum::random_circuit(n, a.depth, a.seed).to_program();
+        let program = zeno::random_circuit(n, a.depth, a.seed).to_program();
         let opts = RunOptions {
             shots: 1,
             seed: Some(a.seed),
@@ -732,7 +732,7 @@ fn cmd_bench(a: &BenchArgs) -> Result<(), kuantum::Error> {
             fusion_max: a.fusion,
             ..Default::default()
         };
-        let r = kuantum::run_program(&program, &opts)?;
+        let r = zeno::run_program(&program, &opts)?;
         for note in &r.notices {
             // A shots=1 bench on a measurement-free circuit is by design.
             if !note.starts_with("circuit has no measurements") && !notes.contains(note) {
@@ -746,7 +746,7 @@ fn cmd_bench(a: &BenchArgs) -> Result<(), kuantum::Error> {
                 fusion_max: Some(0),
                 ..opts
             };
-            let r0 = kuantum::run_program(&program, &base_opts)?;
+            let r0 = zeno::run_program(&program, &base_opts)?;
             let speedup = r0.sim_time.as_secs_f64().max(1e-9) / secs;
             Some((r0.sim_time, speedup))
         } else {
@@ -902,27 +902,27 @@ fn print_bench_human(a: &BenchArgs, rows: &[BenchRow], notes: &[String]) {
 }
 
 // ---------------------------------------------------------------------------
-// kuantum compile
+// zeno compile
 // ---------------------------------------------------------------------------
 
 /// Effective dense-fusion width for display: `--fusion K` wins, otherwise
 /// the backend-dependent auto default (1 cpu, 5 metal).
-fn effective_fusion(fusion: Option<u8>, backend: kuantum::BackendChoice) -> u8 {
+fn effective_fusion(fusion: Option<u8>, backend: zeno::BackendChoice) -> u8 {
     fusion.unwrap_or(match backend {
-        kuantum::BackendChoice::Metal => 5,
+        zeno::BackendChoice::Metal => 5,
         _ => 1,
     })
 }
 
 /// `"≤5"` for explicit widths, `"auto (≤1)"` when the default applies.
-fn fusion_label(fusion: Option<u8>, backend: kuantum::BackendChoice) -> String {
+fn fusion_label(fusion: Option<u8>, backend: zeno::BackendChoice) -> String {
     match fusion {
         Some(k) => format!("≤{k}"),
         None => format!("auto (≤{})", effective_fusion(None, backend)),
     }
 }
 
-fn cmd_compile(a: &CompileArgs) -> Result<(), kuantum::Error> {
+fn cmd_compile(a: &CompileArgs) -> Result<(), zeno::Error> {
     let program = parse_qasm(&a.file)?;
     let compiled = compiler::compile(
         &program,
@@ -1043,7 +1043,7 @@ fn print_compile_human(a: &CompileArgs, c: &compiler::Compiled) {
     println!(
         "{}",
         sty.dim(&format!(
-            "kuantum v{VERSION} · fusion ≤{}",
+            "zeno v{VERSION} · fusion ≤{}",
             a.fusion.unwrap_or(1)
         ))
     );
@@ -1246,14 +1246,14 @@ mod tests {
             json: false,
         };
         // Static: trailing measurements split from the fused body.
-        let mut ghz = kuantum::Circuit::new(3);
+        let mut ghz = zeno::Circuit::new(3);
         ghz.h(0).cx(0, 1).cx(1, 2).measure_all();
         let compiled = compiler::compile(&ghz.to_program(), &CompileOptions::default()).unwrap();
         assert!(!compiled.dynamic);
         print_compile_human(&args, &compiled);
         print_compile_json(&args, &compiled);
         // Dynamic: a mid-circuit reset forces per-shot execution.
-        let mut dyn_c = kuantum::Circuit::new(2);
+        let mut dyn_c = zeno::Circuit::new(2);
         dyn_c.h(0).measure(0, 0).reset(0).cx(0, 1).measure_all();
         let compiled = compiler::compile(&dyn_c.to_program(), &CompileOptions::default()).unwrap();
         assert!(compiled.dynamic);
@@ -1266,7 +1266,7 @@ mod tests {
     /// so formatting bugs surface before the parser lands.
     #[test]
     fn run_printers_do_not_panic() {
-        let mut c = kuantum::Circuit::new(3);
+        let mut c = zeno::Circuit::new(3);
         c.h(0).cx(0, 1).cx(1, 2).measure_all();
         let opts = RunOptions {
             shots: 256,
@@ -1274,7 +1274,7 @@ mod tests {
             want_statevector: true,
             ..Default::default()
         };
-        let r = kuantum::run_program(&c.to_program(), &opts).unwrap();
+        let r = zeno::run_program(&c.to_program(), &opts).unwrap();
         for (json, quiet, statevector) in [
             (false, false, true),
             (false, true, false),

@@ -7,7 +7,7 @@
 // Expected output: the single key "110101", 100% of shots (deterministic;
 // c[5] prints leftmost, so the key reads s bit 5 .. bit 0).
 //
-// Run: kuantum run examples/bernstein_vazirani.qasm --shots 4000 --seed 11
+// Run: zeno run examples/bernstein_vazirani.qasm --shots 4000 --seed 11
 
 OPENQASM 2.0;
 include "qelib1.inc";

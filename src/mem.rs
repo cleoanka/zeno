@@ -6,10 +6,10 @@
 
 use crate::Precision;
 
-/// Total physical RAM in bytes. `KUANTUM_MEM_BYTES` overrides (useful for
+/// Total physical RAM in bytes. `ZENO_MEM_BYTES` overrides (useful for
 /// tests and for pretending to be a smaller machine).
 pub fn physical_ram_bytes() -> u64 {
-    if let Ok(v) = std::env::var("KUANTUM_MEM_BYTES") {
+    if let Ok(v) = std::env::var("ZENO_MEM_BYTES") {
         if let Ok(bytes) = v.parse::<u64>() {
             return bytes;
         }

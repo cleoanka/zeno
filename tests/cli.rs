@@ -1,4 +1,4 @@
-//! End-to-end tests of the `kuantum` binary, run via CARGO_BIN_EXE_kuantum:
+//! End-to-end tests of the `zeno` binary, run via CARGO_BIN_EXE_zeno:
 //! help surfaces, `info`/`bench`/`compile` JSON shapes, error paths, and
 //! QASM end-to-end runs (bell counts, determinism, histogram, statevector).
 
@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_kuantum"))
+    Command::new(env!("CARGO_BIN_EXE_zeno"))
 }
 
 fn run(args: &[&str]) -> Output {
@@ -105,7 +105,7 @@ fn help_other_subcommands() {
 fn version_flag() {
     let out = run(&["--version"]);
     assert!(out.status.success());
-    assert!(stdout(&out).contains("kuantum"));
+    assert!(stdout(&out).contains("zeno"));
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ fn info_json_has_expected_shape() {
     // 16 GiB pretend-RAM -> budget 12 GiB -> 29 qubits f64, 30 qubits f32.
     let out = bin()
         .args(["info", "--json"])
-        .env("KUANTUM_MEM_BYTES", (16u64 << 30).to_string())
+        .env("ZENO_MEM_BYTES", (16u64 << 30).to_string())
         .output()
         .unwrap();
     assert!(out.status.success(), "stderr: {}", stderr(&out));
@@ -139,7 +139,7 @@ fn info_json_has_expected_shape() {
         (1u64 << 30) * 16
     );
     let overrides = v["overrides"].as_array().unwrap();
-    assert!(overrides.iter().any(|o| o == "KUANTUM_MEM_BYTES"));
+    assert!(overrides.iter().any(|o| o == "ZENO_MEM_BYTES"));
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn info_human_mentions_overrides_and_stays_plain_when_piped() {
     let out = run(&["info"]);
     assert!(out.status.success());
     let text = stdout(&out);
-    assert!(text.contains("KUANTUM_MEM_BYTES"));
+    assert!(text.contains("ZENO_MEM_BYTES"));
     assert!(text.contains("--mem-limit"));
     assert!(text.contains("f64") && text.contains("f32"));
     assert!(
@@ -204,7 +204,7 @@ fn bench_skips_sizes_over_the_budget() {
     // Pretend 1 MiB of RAM: 4 qubits fit, 26 do not — must not error out.
     let out = bin()
         .args(["bench", "--json", "--qubits", "4,26", "--depth", "2"])
-        .env("KUANTUM_MEM_BYTES", (1u64 << 20).to_string())
+        .env("ZENO_MEM_BYTES", (1u64 << 20).to_string())
         .output()
         .unwrap();
     assert!(out.status.success(), "stderr: {}", stderr(&out));
@@ -345,7 +345,7 @@ fn run_bell_quiet_is_just_the_histogram() {
     let text = stdout(&out);
     assert!(text.contains("▇"));
     assert!(!text.contains("seed 0x"), "quiet must drop the seed line");
-    assert!(!text.contains("kuantum v"), "quiet must drop the header");
+    assert!(!text.contains("zeno v"), "quiet must drop the header");
 }
 
 #[test]

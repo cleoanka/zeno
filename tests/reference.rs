@@ -1,4 +1,4 @@
-//! Adversarial reference verification of kuantum.
+//! Adversarial reference verification of zeno.
 //!
 //! `RefSim` is a from-scratch textbook dense state-vector simulator with
 //! deliberately different implementation choices from `src/state.rs`: one
@@ -6,7 +6,7 @@
 //! basis index — no split re/im arrays, no run-walk kernels, no fusion, no
 //! rayon. Every native gate matrix is hand-coded here from the standard
 //! definitions (qiskit U(θ,φ,λ) convention; controls first = low bits of
-//! the local index) and first cross-checked against `kuantum::gates::build`;
+//! the local index) and first cross-checked against `zeno::gates::build`;
 //! the full simulator is then cross-checked gate-by-gate in multiple qubit
 //! argument orders (including descending ones), and on random circuits at
 //! every fusion level and both precisions.
@@ -14,9 +14,9 @@
 //! All randomness is seeded through a local splitmix64 so the tests are
 //! deterministic and need no external crates.
 
-use kuantum::gates::{self, GateMatrix};
-use kuantum::ir::Instr;
-use kuantum::{random_circuit, Circuit, Precision, Program, RunOptions, Simulator, C64};
+use zeno::gates::{self, GateMatrix};
+use zeno::ir::Instr;
+use zeno::{random_circuit, Circuit, Precision, Program, RunOptions, Simulator, C64};
 
 const PI: f64 = std::f64::consts::PI;
 
@@ -502,7 +502,7 @@ fn hand_coded_matrices_match_gate_library() {
 // ------------------------------------------------------------- part 2a
 
 /// The single most important test: every native gate, applied through the
-/// full kuantum pipeline to a random product state, must match the
+/// full zeno pipeline to a random product state, must match the
 /// reference for several argument orders including descending ones. This
 /// catches qubit-permutation (control/target) bugs.
 #[test]
@@ -552,7 +552,7 @@ fn every_native_gate_matches_reference_in_all_argument_orders() {
 
 /// Prove the harness is sensitive: a deliberately wrong phase (S vs S†)
 /// and a deliberately swapped control/target (cx(0,1) vs cx(1,0)) must
-/// produce a large visible difference against kuantum, while the correct
+/// produce a large visible difference against zeno, while the correct
 /// reference agrees to 1e-12. Loose tolerances or order-blind comparisons
 /// would silently pass such errors; this test forbids that.
 #[test]
@@ -599,7 +599,7 @@ fn harness_detects_injected_phase_and_order_errors() {
 // ------------------------------------------------------------- part 2b
 
 #[test]
-fn kuantum_random_circuits_match_reference_at_all_fusion_levels() {
+fn zeno_random_circuits_match_reference_at_all_fusion_levels() {
     for n in 2..=10u32 {
         let c = random_circuit(n, 20, 1000 + u64::from(n));
         let want = ref_of_program(&c.to_program());
@@ -700,7 +700,7 @@ fn disjoint_wide_blocks_force_group_flushes() {
         fusion_max: Some(5),
         ..Default::default()
     };
-    let r = kuantum::run_program(&c.to_program(), &opts).unwrap();
+    let r = zeno::run_program(&c.to_program(), &opts).unwrap();
     assert!(
         r.stats.max_fused <= 5,
         "fusion_max 5 violated: max_fused = {}",

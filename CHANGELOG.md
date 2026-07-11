@@ -15,7 +15,7 @@ Initial release.
   dynamic path (mid-circuit measure, reset, `if`) with parallel shots when
   the memory budget allows; deterministic seeding everywhere.
 - RAM-aware capacity planning: f64/f32 per run, auto-precision fallback,
-  `kuantum info` capacity table, `--mem-limit`/`KUANTUM_MEM_BYTES` overrides.
+  `zeno info` capacity table, `--mem-limit`/`ZENO_MEM_BYTES` overrides.
 - OpenQASM 2.0 front end (registers, user gates, broadcasting, expressions,
   `if`/measure/reset/barrier) with line:col error reporting.
 - Optional Metal GPU backend (`--features metal`, f32, unified memory).

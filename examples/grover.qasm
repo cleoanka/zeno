@@ -7,7 +7,7 @@
 // Expected output: key "101" (c[2] c[1] c[0] left to right) ~94.5% of shots;
 // the other seven keys share the remaining ~5.5% (~0.8% each).
 //
-// Run: kuantum run examples/grover.qasm --shots 4000 --seed 11
+// Run: zeno run examples/grover.qasm --shots 4000 --seed 11
 
 OPENQASM 2.0;
 include "qelib1.inc";

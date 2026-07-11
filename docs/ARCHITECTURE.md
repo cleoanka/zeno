@@ -1,6 +1,6 @@
 # Architecture
 
-`kuantum` is three machines bolted together: a **compiler** that shrinks a
+`zeno` is three machines bolted together: a **compiler** that shrinks a
 circuit, a **kernel core** that sweeps a state vector, and an **executor**
 that decides how many times and on what hardware the sweeps run.
 

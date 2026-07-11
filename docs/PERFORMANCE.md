@@ -2,16 +2,16 @@
 
 All numbers: **Apple M4 Pro** (8P+4E, 12 threads), 24 GB, macOS 15,
 `cargo build --release` (with the repo's `-C target-cpu=native`),
-kuantum v0.1.0, medians of 3 runs on a normally-loaded desktop.
+zeno v0.1.0, medians of 3 runs on a normally-loaded desktop.
 Every command is reproducible as written.
 
 ## Head-to-head vs qiskit-aer (identical OpenQASM files)
 
 qiskit 2.5.0 + qiskit-aer 0.17.2, `AerSimulator(method="statevector")`
-(f64, OpenMP multithreaded), transpile excluded from timing; kuantum
+(f64, OpenMP multithreaded), transpile excluded from timing; zeno
 `sim_time` (parse/compile excluded), 1024 shots both.
 
-| circuit | aer f64 | kuantum cpu f64 | kuantum cpu f32 | kuantum metal f32 |
+| circuit | aer f64 | zeno cpu f64 | zeno cpu f32 | zeno metal f32 |
 |---|---|---|---|---|
 | random 20q, depth 12 | 64 ms | **40 ms** (1.6×) | 32 ms | — |
 | random 24q, depth 12 | 894 ms | 900 ms (1.0×) | 450 ms | **253 ms** (3.5×) |
@@ -25,7 +25,7 @@ engines. Distributions were separately cross-validated against aer to
 max |Δamp| < 1e-9 (f64) and TVD < 0.01 at 100k shots on 60+ circuits.
 
 f32 vs f64 note: aer's statevector method is double-precision, so the f32
-columns are a *capacity/speed trade* kuantum offers, not an apples-to-apples
+columns are a *capacity/speed trade* zeno offers, not an apples-to-apples
 engine comparison. The f64 column is the fair fight.
 
 ## CPU scaling (brickwork depth 12, defaults)
@@ -39,7 +39,7 @@ engine comparison. The f64 column is the fair fight.
 | 28 | 16.2 s | 8.6 s | 15.3 G |
 
 Reproduce with
-`kuantum bench --qubits 20,22,24,26,28 --depth 12 --precision f32`.
+`zeno bench --qubits 20,22,24,26,28 --depth 12 --precision f32`.
 
 f32 runs ~1.9× faster than f64 at scale — the kernels are memory-bound,
 so halving the bytes halves the time. It also buys one extra qubit at the
@@ -48,11 +48,11 @@ same RAM.
 ## Big states and dynamics
 
 - **GHZ-29** (8 GiB state, f64): ~9.2 s end-to-end, peak RSS ≈ 7.2 GiB
-  (`kuantum run ghz29.qasm --shots 1024`). Capacity on 24 GB: 30 qubits
-  f64 / 31 qubits f32 (`kuantum info`).
+  (`zeno run ghz29.qasm --shots 1024`). Capacity on 24 GB: 30 qubits
+  f64 / 31 qubits f32 (`zeno info`).
 - **Teleportation** (dynamic: mid-circuit measures + `if`):
   1M shots in 73 ms ≈ **13.6 M shots/s**
-  (`kuantum run examples/teleport.qasm --shots 1000000`).
+  (`zeno run examples/teleport.qasm --shots 1000000`).
 
 ## Why the defaults look the way they do
 
