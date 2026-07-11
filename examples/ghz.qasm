@@ -6,7 +6,7 @@
 // Expected output: exactly two keys, "000000000000000000000000" and
 // "111111111111111111111111", ~50% each — nothing in between.
 //
-// Run: target/debug/kuantum run examples/ghz.qasm --shots 4000 --seed 11
+// Run: kuantum run examples/ghz.qasm --shots 4000 --seed 11
 
 OPENQASM 2.0;
 include "qelib1.inc";

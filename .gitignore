@@ -1,5 +1,4 @@
 /target
-Cargo.lock
 *.profraw
 .DS_Store
 /bench-results

@@ -17,7 +17,7 @@ qiskit 2.5.0 + qiskit-aer 0.17.2, `AerSimulator(method="statevector")`
 | random 24q, depth 12 | 894 ms | 900 ms (1.0×) | 450 ms | **253 ms** (3.5×) |
 | random 26q, depth 12 | 3.83 s | 3.86 s (1.0×) | 2.05 s | **0.95 s** (4.0×) |
 | random 24q, depth 40 | 3.39 s | **2.99 s** (1.1×) | 1.58 s | **0.73 s** (4.7×) |
-| QFT 24q | 607 ms | **375 ms** (1.6×) | 290 ms | **140 ms** (4.3×) |
+| QFT 24q (no final swaps, as `qft()` builds it) | 607 ms | **375 ms** (1.6×) | 290 ms | **140 ms** (4.3×) |
 
 "random" = brickwork: a layer of Haar-ish `u3` on every qubit + an
 alternating CX ladder per layer. Same file, same seed, loaded by both

@@ -28,7 +28,8 @@ cross-validated against an independent reference and against qiskit itself.
   Metal** on an M4 Pro.
 - **A real GPU backend.** `--features metal` puts the state in unified
   memory: the GPU sweeps gates, the CPU samples the same bytes — zero copies.
-  Same seed ⇒ **bit-identical counts** to the CPU backend (tested).
+  Same seed and fusion setting ⇒ **bit-identical counts** to the CPU
+  backend (tested, including across the command-buffer rollover path).
 - **RAM-aware by design.** `kuantum info` tells you exactly how many qubits
   your machine holds; runs auto-select f64/f32 per budget and refuse
   politely (with the capacity table) instead of swap-storming. 24 GB ⇒ 30
