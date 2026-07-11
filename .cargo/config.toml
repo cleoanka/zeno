@@ -1,0 +1,4 @@
+# Tune codegen for the host CPU (Apple Silicon: enables NEON/FMA scheduling
+# for the exact core family, e.g. M1..M4). Remove if building portable binaries.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "target-cpu=native"]
