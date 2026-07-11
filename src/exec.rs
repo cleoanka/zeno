@@ -131,6 +131,9 @@ pub trait Backend: Send {
         let (qs, m) = crate::compiler::permute_unitary_to_sorted(&[control, target], &mat);
         self.apply_unitary(&qs, &m);
     }
+    /// Probability that qubit `q` would measure 1, without collapsing.
+    /// Used by state-dependent noise channels (amplitude damping).
+    fn prob_one(&mut self, q: u32) -> f64;
     /// Measure qubit `q` using the uniform draw `u ∈ [0,1)`; collapses.
     fn measure(&mut self, q: u32, u: f64) -> bool;
     fn reset_all(&mut self);
@@ -175,6 +178,10 @@ impl<T: Real> Backend for CpuBackend<T> {
 
     fn apply_cx(&mut self, control: u32, target: u32) {
         state::apply_cx(&mut self.st, control, target);
+    }
+
+    fn prob_one(&mut self, q: u32) -> f64 {
+        state::prob_one(&self.st, q)
     }
 
     fn measure(&mut self, q: u32, u: f64) -> bool {

@@ -546,6 +546,12 @@ impl Backend for MetalBackend {
         self.encode(&pipes.diag, buf, &p, grid);
     }
 
+    fn prob_one(&mut self, q: u32) -> f64 {
+        self.flush();
+        let (re, im) = self.slices();
+        prob_one_slices(re, im, q)
+    }
+
     fn measure(&mut self, q: u32, u: f64) -> bool {
         self.flush();
         let (re, im) = self.slices();
