@@ -9,7 +9,8 @@ Initial release.
   diagonal kernel; rayon parallelism across P+E cores.
 - Fusion compiler: self-inverse cancellation → commuting diagonal fusion →
   greedy dense gate fusion, barrier fences. Dense-fusion width defaults
-  per backend (1 on CPU, 5 on Metal — measured, not assumed).
+  per backend (1 on CPU, 5 on Metal — measured, not assumed). CX executes
+  as a zero-arithmetic permutation sweep.
 - Executor: analytic O(2ⁿ + shots·log shots) sampling for static circuits; per-shot
   dynamic path (mid-circuit measure, reset, `if`) with parallel shots when
   the memory budget allows; deterministic seeding everywhere.

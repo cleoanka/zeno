@@ -1,0 +1,48 @@
+<svg width="760" height="380" viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace">
+  <defs>
+    <linearGradient id="metal" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#34d399"/>
+    </linearGradient>
+  </defs>
+  <rect width="760" height="380" rx="12" fill="#0b1120"/>
+  <text x="28" y="38" font-size="16" fill="#e2e8f0" font-weight="700">Same OpenQASM file, same M4 Pro — wall-clock sim time (lower is better)</text>
+  <text x="28" y="58" font-size="12.5" fill="#64748b">medians of 3 · qiskit-aer 0.17.2 statevector (f64, OpenMP) · kuantum v0.1.0 · 1024 shots</text>
+
+  <!-- scale: 1s = 150px, x0 = 210 -->
+  <!-- group 1: random 26q depth 12 -->
+  <g font-size="13">
+    <text x="28" y="102" fill="#e2e8f0">random 26q·d12</text>
+    <rect x="210" y="88"  width="575" height="15" rx="2" fill="#475569" opacity="0.9"/>
+    <text x="740" y="100" fill="#94a3b8" text-anchor="end">aer f64 · 3.83 s</text>
+    <rect x="210" y="107" width="578" height="15" rx="2" fill="#6366f1"/>
+    <text x="740" y="119" fill="#c7d2fe" text-anchor="end">kuantum cpu f64 · 3.86 s</text>
+    <rect x="210" y="126" width="143" height="15" rx="2" fill="url(#metal)"/>
+    <text x="362" y="138" fill="#a7f3d0">kuantum metal f32 · 0.95 s (4.0×)</text>
+  </g>
+
+  <!-- group 2: random 24q depth 40 -->
+  <g font-size="13">
+    <text x="28" y="186" fill="#e2e8f0">random 24q·d40</text>
+    <rect x="210" y="172" width="509" height="15" rx="2" fill="#475569" opacity="0.9"/>
+    <text x="712" y="184" fill="#94a3b8" text-anchor="end">aer f64 · 3.39 s</text>
+    <rect x="210" y="191" width="449" height="15" rx="2" fill="#6366f1"/>
+    <text x="652" y="203" fill="#c7d2fe" text-anchor="end">kuantum cpu f64 · 2.99 s</text>
+    <rect x="210" y="210" width="109" height="15" rx="2" fill="url(#metal)"/>
+    <text x="328" y="222" fill="#a7f3d0">kuantum metal f32 · 0.73 s (4.7×)</text>
+  </g>
+
+  <!-- group 3: QFT 24q -->
+  <g font-size="13">
+    <text x="28" y="270" fill="#e2e8f0">QFT 24q</text>
+    <rect x="210" y="256" width="91" height="15" rx="2" fill="#475569" opacity="0.9"/>
+    <text x="310" y="268" fill="#94a3b8">aer f64 · 0.61 s</text>
+    <rect x="210" y="275" width="56" height="15" rx="2" fill="#6366f1"/>
+    <text x="275" y="287" fill="#c7d2fe">kuantum cpu f64 · 0.38 s</text>
+    <rect x="210" y="294" width="21" height="15" rx="2" fill="url(#metal)"/>
+    <text x="240" y="306" fill="#a7f3d0">kuantum metal f32 · 0.14 s (4.3×)</text>
+  </g>
+
+  <line x1="210" y1="74" x2="210" y2="320" stroke="#1e293b"/>
+  <text x="28" y="352" font-size="12" fill="#64748b">cpu f32 is ~2× faster again where precision allows (26q·d12 in 2.0 s) · reproduce: docs/PERFORMANCE.md</text>
+</svg>

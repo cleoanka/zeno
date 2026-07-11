@@ -1,0 +1,56 @@
+<svg width="760" height="400" viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace">
+  <defs>
+    <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <!-- window -->
+  <rect x="1" y="1" width="758" height="398" rx="12" fill="#0b1120" stroke="#1e293b" stroke-width="1.5"/>
+  <rect x="1" y="1" width="758" height="36" rx="12" fill="#0f172a"/>
+  <rect x="1" y="25" width="758" height="13" fill="#0f172a"/>
+  <circle cx="24" cy="19" r="6" fill="#ff5f57"/>
+  <circle cx="44" cy="19" r="6" fill="#febc2e"/>
+  <circle cx="64" cy="19" r="6" fill="#28c840"/>
+  <text x="380" y="24" font-size="13" fill="#64748b" text-anchor="middle">kuantum — zsh</text>
+
+  <g font-size="14.5">
+    <text x="28" y="70" fill="#34d399">$</text>
+    <text x="46" y="70" fill="#e2e8f0">kuantum run examples/grover.qasm --shots 4000 --seed 11</text>
+
+    <text x="28" y="102" fill="#64748b">kuantum v0.1.0 · Apple M4 Pro · 12 threads</text>
+    <text x="28" y="124" fill="#64748b">grover · 3 qubits · 43 gates -&gt; 31 ops · f64 · cpu-f64 · 240 µs</text>
+
+    <!-- histogram -->
+    <text x="28" y="160" fill="#e2e8f0" font-weight="700">101</text>
+    <rect x="76" y="148" width="330" height="14" rx="2" fill="url(#bar)"/>
+    <text x="418" y="160" fill="#e2e8f0">3777</text>
+    <text x="470" y="160" fill="#94a3b8">94.4%</text>
+
+    <g fill="#94a3b8">
+      <text x="28" y="184" fill="#e2e8f0" font-weight="700">110</text>
+      <rect x="76" y="172" width="8" height="14" rx="2" fill="#334155"/>
+      <text x="418" y="184">36</text><text x="470" y="184">0.9%</text>
+      <text x="28" y="208" fill="#e2e8f0" font-weight="700">000</text>
+      <rect x="76" y="196" width="8" height="14" rx="2" fill="#334155"/>
+      <text x="418" y="208">34</text><text x="470" y="208">0.9%</text>
+      <text x="28" y="232" fill="#e2e8f0" font-weight="700">001</text>
+      <rect x="76" y="220" width="8" height="14" rx="2" fill="#334155"/>
+      <text x="418" y="232">33</text><text x="470" y="232">0.8%</text>
+      <text x="28" y="256" fill="#e2e8f0" font-weight="700">011</text>
+      <rect x="76" y="244" width="8" height="14" rx="2" fill="#334155"/>
+      <text x="418" y="256">32</text><text x="470" y="256">0.8%</text>
+      <text x="28" y="280" fill="#e2e8f0" font-weight="700">111</text>
+      <rect x="76" y="268" width="8" height="14" rx="2" fill="#334155"/>
+      <text x="418" y="280">32</text><text x="470" y="280">0.8%</text>
+      <text x="28" y="304" fill="#e2e8f0" font-weight="700">010</text>
+      <rect x="76" y="292" width="8" height="14" rx="2" fill="#334155"/>
+      <text x="418" y="304">29</text><text x="470" y="304">0.7%</text>
+      <text x="28" y="328" fill="#e2e8f0" font-weight="700">100</text>
+      <rect x="76" y="316" width="8" height="14" rx="2" fill="#334155"/>
+      <text x="418" y="328">27</text><text x="470" y="328">0.7%</text>
+    </g>
+
+    <text x="28" y="366" fill="#64748b">seed 0x000000000000000b (reproduce with --seed)</text>
+  </g>
+</svg>
