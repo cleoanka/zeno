@@ -184,12 +184,16 @@ let r = Simulator::new().shots(10_000).seed(7).noise(model).run(&c).unwrap();
 
 The `run` subcommand exposes the model through one flag:
 
-- `--noise <MODEL>` — `MODEL` is **inline JSON** if the (trimmed) argument
-  starts with `{`, otherwise it is a **path** to a JSON file with the same
-  schema. Examples:
+- `--noise <MODEL>` — three forms, decided by shape: **inline JSON** if the
+  (trimmed) argument starts with `{`; comma-separated **`key=value` pairs**
+  if it contains `=` (keys are the `NoiseModel` field names; an unknown key
+  errors with the full key list); otherwise a **path** to a JSON file with
+  the same schema. All three produce identical results at the same seed.
+  Examples:
 
   ```sh
   zeno run bell.qasm --shots 20000 --seed 7 --noise '{"depolarizing_2q": 0.05}'
+  zeno run bell.qasm --noise bit_flip=0.01,readout_flip_1to0=0.02
   zeno run bell.qasm --noise ibm-ish.json
   ```
 

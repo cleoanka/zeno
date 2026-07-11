@@ -112,7 +112,7 @@ accordingly for large n × high shots.
 
 ## Method notes
 
-- Times are `sim_time` from `--json` (gates + sampling; parse/compile
+- Times are `sim_time_ms` from `--json` (gates + sampling; parse/compile
   excluded — compile is ~60 ms for a 20k-gate file, linear).
 - Throughput metric: `input_gates × 2ⁿ / sim_time` ("amp-updates/s") —
   it deliberately counts *input* gates so different fusion settings stay
@@ -121,3 +121,9 @@ accordingly for large n × high shots.
   medians of 3 are reported. Nothing was cherry-picked; the perf review
   that produced these protocols was adversarial (findings that didn't
   reproduce were dropped).
+- On a *busy* desktop (load average ≳ 2) everything inflates together —
+  up to ~2× was observed with a browser + audio active. To normalize,
+  calibrate with `zeno bench --qubits 24 --depth 12 --precision f64`
+  (documented median: 926 ms) and scale accordingly; the internal ratios
+  (f32/f64, QFT/bench) are load-invariant and are what the release gate
+  actually re-verifies.

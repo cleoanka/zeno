@@ -55,7 +55,7 @@ cross-validated against an independent reference and against qiskit itself.
   gates every kernel and every native gate in every argument order; 60+
   circuits cross-validated against qiskit-aer to max |Δamp| < 1e-9; all
   unsafe kernels have written disjointness proofs and were stress-tested at
-  1/3/16 threads. 270 tests, clippy-clean, CI on Apple Silicon.
+  1/3/16 threads. 270 tests on the full Metal build (261 CPU-only), clippy-clean, CI on Apple Silicon.
 
 ## Benchmarks
 
@@ -101,7 +101,7 @@ zeno demo --list     # ghz, qft, grover, teleport, noisy ...
 Then run real circuits:
 
 ```sh
-zeno run examples/bell.qasm --shots 1000
+zeno run examples/bell.qasm --shots 1000 --seed 42
 ```
 
 ```

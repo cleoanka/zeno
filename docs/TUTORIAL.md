@@ -42,7 +42,7 @@ Success looks like this:
 
 ```sh
 $ zeno --version
-zeno 0.1.0
+zeno 0.2.0
 ```
 
 ## 3. Your first run: `zeno demo`
