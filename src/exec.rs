@@ -280,8 +280,7 @@ fn make_backend(
             {
                 let _ = (n_qubits, precision);
                 Err(Error::Unsupported(
-                    "this build has no Metal backend (rebuild with `--features metal`)"
-                        .into(),
+                    "this build has no Metal backend (rebuild with `--features metal`)".into(),
                 ))
             }
         }

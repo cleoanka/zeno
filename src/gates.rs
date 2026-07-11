@@ -82,9 +82,10 @@ fn controlled1(u: &[C64]) -> Vec<C64> {
     m
 }
 
-/// Controlled version of a 1-qubit diagonal: qubits = [control, target].
+/// Controlled version of a 1-qubit diagonal: qubits = [control, target],
+/// so control = bit 0 and index j = control | target<<1.
 fn cdiag1(d: &[C64]) -> Vec<C64> {
-    vec![c(1.0, 0.0), c(1.0, 0.0), d[0], d[1]]
+    vec![c(1.0, 0.0), d[0], c(1.0, 0.0), d[1]]
 }
 
 /// Permutation matrix from an index map `perm(j) = i` (column j → row i).

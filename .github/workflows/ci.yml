@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    # Apple Silicon runner: same ISA the kernels are tuned for.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test
+      - name: Metal feature compiles
+        run: cargo check --features metal
+      - name: Release smoke (bell)
+        run: |
+          cargo build --release
+          ./target/release/kuantum info
+          ./target/release/kuantum run examples/bell.qasm --shots 1000 --seed 1

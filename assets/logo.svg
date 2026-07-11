@@ -1,0 +1,30 @@
+<svg width="720" height="180" viewBox="0 0 720 180" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="kuantum">
+  <defs>
+    <linearGradient id="k-accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="0.55" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#34d399"/>
+    </linearGradient>
+    <linearGradient id="k-dim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366f1" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0.35"/>
+    </linearGradient>
+  </defs>
+
+  <!-- mark: |0>..|1> superposition orbits -->
+  <g transform="translate(90,90)">
+    <ellipse rx="66" ry="26" transform="rotate(-24)" stroke="url(#k-dim)" stroke-width="3"/>
+    <ellipse rx="66" ry="26" transform="rotate(56)" stroke="url(#k-dim)" stroke-width="3"/>
+    <ellipse rx="66" ry="26" transform="rotate(-64)" stroke="url(#k-accent)" stroke-width="4"/>
+    <!-- state-vector arrow -->
+    <line x1="0" y1="0" x2="34" y2="-40" stroke="url(#k-accent)" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="34" cy="-40" r="8" fill="url(#k-accent)"/>
+    <circle r="6.5" fill="#e2e8f0"/>
+  </g>
+
+  <!-- wordmark -->
+  <g font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace">
+    <text x="185" y="103" font-size="58" font-weight="700" fill="#e2e8f0" letter-spacing="1">kuantum</text>
+    <text x="188" y="138" font-size="19" fill="#94a3b8" letter-spacing="0.5">quantum circuits, at the speed of Apple Silicon</text>
+  </g>
+</svg>
