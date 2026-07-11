@@ -58,12 +58,17 @@ Order matters; each pass feeds the next:
    looking through gates on disjoint qubits. Barriers fence.
 2. **Diagonal fusion** — diagonal gates commute with each other and with
    anything disjoint, so runs of `rz/t/s/cz/cp/crz/rzz/…` collapse into one
-   table of ≤ 2^10 phases applied in a single sweep. A QFT's whole
-   controlled-phase ladder becomes one diagonal per layer.
-3. **General fusion** — greedy absorb-while-support-≤-kmax (default 5,
-   qiskit-aer's default): matrices are embedded into the union support and
-   multiplied. A depth-20 dense circuit typically compiles to ~n/4 fused
-   ops per layer — each one memory sweep instead of five.
+   table of ≤ 2^10 phases by default (cap 2^12) applied in a single sweep.
+   A QFT's whole controlled-phase ladder becomes one diagonal per layer.
+   This pass runs whenever fusion isn't disabled outright — it is a
+   memory-bound win on every backend.
+3. **Dense fusion** — greedy absorb-while-support-≤-kmax: matrices are
+   embedded into the union support and multiplied. Width is
+   **backend-dependent by default**: 1 on CPU, 5 on Metal. Measured on
+   M4 Pro, trading five memory sweeps for one 2^k×2^k matmul sweep wins
+   ~2× on the GPU but *loses* ~3× on the CPU, where the plain 1-qubit
+   run-walk kernel is already the fastest thing in the crate (`--fusion`
+   overrides).
 4. **Finalize** — trailing measurements split off; anything dynamic
    (mid-circuit measure, `reset`, `if`) flags the circuit for per-shot
    execution.

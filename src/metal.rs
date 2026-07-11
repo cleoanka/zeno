@@ -699,7 +699,7 @@ mod tests {
                     seed: Some(9000 + u64::from(n)),
                     precision: Some(Precision::F32),
                     backend,
-                    fusion_max: fusion,
+                    fusion_max: Some(fusion),
                     want_statevector: true,
                     ..Default::default()
                 };
@@ -716,6 +716,39 @@ mod tests {
                 assert_eq!(g.counts, h.counts, "n={n} fusion={fusion}");
             }
         }
+    }
+
+    /// (b addendum) Cross the 256-dispatch command-buffer rollover: with
+    /// fusion 0, random_circuit(11, 30) issues ~480 dispatches between
+    /// reads, forcing at least one rollover — ordering across command
+    /// buffers must not change the result.
+    #[test]
+    fn parity_across_command_buffer_rollover() {
+        let mut c = random_circuit(11, 30, 4242);
+        c.measure_all();
+        let opts = |backend| RunOptions {
+            shots: 512,
+            seed: Some(4242),
+            precision: Some(Precision::F32),
+            backend,
+            fusion_max: Some(0),
+            want_statevector: true,
+            ..Default::default()
+        };
+        let p = c.to_program();
+        let g = run_program(&p, &opts(BackendChoice::Metal)).unwrap();
+        let h = run_program(&p, &opts(BackendChoice::Cpu)).unwrap();
+        assert!(
+            g.stats.output_ops > MAX_DISPATCHES_PER_CB,
+            "test must cross the rollover boundary ({} ops)",
+            g.stats.output_ops
+        );
+        let d = max_delta(
+            g.statevector.as_ref().unwrap(),
+            h.statevector.as_ref().unwrap(),
+        );
+        assert!(d < 1e-4, "rollover parity: max |delta| = {d:e}");
+        assert_eq!(g.counts, h.counts, "rollover parity counts");
     }
 
     /// (b addendum) A QFT ladder on a rotated product state: diagonal
@@ -887,18 +920,23 @@ mod tests {
     fn perf_smoke_22q() {
         let mut c = random_circuit(22, 10, 424_242);
         c.measure_all();
+        // Pin fusion on BOTH sides: bit-exact counts parity holds only when
+        // the two backends execute the identical op stream (the auto
+        // default is 1 on cpu / 5 on metal, which changes f32 rounding).
         let opts = |backend| RunOptions {
             shots: 128,
             seed: Some(1),
             precision: Some(Precision::F32),
             backend,
+            fusion_max: Some(5),
             ..Default::default()
         };
         let p = c.to_program();
         let g = run_program(&p, &opts(BackendChoice::Metal)).unwrap();
         let h = run_program(&p, &opts(BackendChoice::Cpu)).unwrap();
         println!(
-            "perf smoke 22q depth 10 (fusion 5): metal {:.1?} vs cpu-f32 {:.1?} ({:.2}x)",
+            "perf smoke 22q depth 10 (fusion 5 both — same-config, not best-vs-best): \
+             metal {:.1?} vs cpu-f32 {:.1?} ({:.2}x)",
             g.sim_time,
             h.sim_time,
             h.sim_time.as_secs_f64() / g.sim_time.as_secs_f64().max(1e-9),

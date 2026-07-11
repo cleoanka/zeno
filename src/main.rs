@@ -71,9 +71,9 @@ struct RunArgs {
     /// Simulation backend
     #[arg(long, value_enum, default_value_t = BackendArg::Auto)]
     backend: BackendArg,
-    /// Maximum fused-gate width in qubits (0 disables fusion)
-    #[arg(long, value_name = "K", default_value_t = 5)]
-    fusion: u8,
+    /// Maximum dense fused-gate width 0-6 [default: auto — 1 on cpu, 5 on metal]
+    #[arg(long, value_name = "K")]
+    fusion: Option<u8>,
     /// Memory budget, e.g. 8g, 512m, 1024k, or raw bytes
     #[arg(long, value_name = "SIZE", value_parser = parse_size)]
     mem_limit: Option<u64>,
@@ -102,9 +102,9 @@ struct BenchArgs {
     /// Layers in the random circuit
     #[arg(long, default_value_t = 12)]
     depth: u32,
-    /// Maximum fused-gate width in qubits (0 disables fusion)
-    #[arg(long, value_name = "K", default_value_t = 5)]
-    fusion: u8,
+    /// Maximum dense fused-gate width 0-6 [default: auto — 1 on cpu, 5 on metal]
+    #[arg(long, value_name = "K")]
+    fusion: Option<u8>,
     /// State-vector precision
     #[arg(long, value_enum, default_value_t = PrecisionArg::Auto)]
     precision: PrecisionArg,
@@ -126,9 +126,9 @@ struct BenchArgs {
 struct CompileArgs {
     /// OpenQASM 2.0 file
     file: PathBuf,
-    /// Maximum fused-gate width in qubits (0 disables fusion)
-    #[arg(long, value_name = "K", default_value_t = 5)]
-    fusion: u8,
+    /// Maximum dense fused-gate width 0-6 [default: 1, the cpu auto value]
+    #[arg(long, value_name = "K")]
+    fusion: Option<u8>,
     /// Machine-readable JSON output
     #[arg(long)]
     json: bool,
@@ -743,7 +743,7 @@ fn cmd_bench(a: &BenchArgs) -> Result<(), kuantum::Error> {
         let amp_per_s = r.stats.input_gates as f64 * 2f64.powi(n as i32) / secs;
         let baseline = if a.compare_fusion {
             let base_opts = RunOptions {
-                fusion_max: 0,
+                fusion_max: Some(0),
                 ..opts
             };
             let r0 = kuantum::run_program(&program, &base_opts)?;
@@ -818,7 +818,8 @@ fn print_bench_json(a: &BenchArgs, rows: &[BenchRow], notes: &[String]) {
         "chip": chip_name(),
         "threads": rayon::current_num_threads(),
         "depth": a.depth,
-        "fusion": a.fusion,
+        "fusion": effective_fusion(a.fusion, a.backend.to_choice()),
+        "fusion_auto": a.fusion.is_none(),
         "seed": a.seed,
         "precision": a.precision.label(),
         "backend": a.backend.label(),
@@ -837,9 +838,9 @@ fn print_bench_human(a: &BenchArgs, rows: &[BenchRow], notes: &[String]) {
     println!(
         "{}",
         sty.dim(&format!(
-            "bench · depth {} · fusion ≤{} · seed {} · {} · {}",
+            "bench · depth {} · fusion {} · seed {} · {} · {}",
             a.depth,
-            a.fusion,
+            fusion_label(a.fusion, a.backend.to_choice()),
             a.seed,
             a.precision.label(),
             a.backend.label(),
@@ -904,12 +905,29 @@ fn print_bench_human(a: &BenchArgs, rows: &[BenchRow], notes: &[String]) {
 // kuantum compile
 // ---------------------------------------------------------------------------
 
+/// Effective dense-fusion width for display: `--fusion K` wins, otherwise
+/// the backend-dependent auto default (1 cpu, 5 metal).
+fn effective_fusion(fusion: Option<u8>, backend: kuantum::BackendChoice) -> u8 {
+    fusion.unwrap_or(match backend {
+        kuantum::BackendChoice::Metal => 5,
+        _ => 1,
+    })
+}
+
+/// `"≤5"` for explicit widths, `"auto (≤1)"` when the default applies.
+fn fusion_label(fusion: Option<u8>, backend: kuantum::BackendChoice) -> String {
+    match fusion {
+        Some(k) => format!("≤{k}"),
+        None => format!("auto (≤{})", effective_fusion(None, backend)),
+    }
+}
+
 fn cmd_compile(a: &CompileArgs) -> Result<(), kuantum::Error> {
     let program = parse_qasm(&a.file)?;
     let compiled = compiler::compile(
         &program,
         &CompileOptions {
-            fusion_max: a.fusion,
+            fusion_max: a.fusion.unwrap_or(1),
             ..Default::default()
         },
     )?;
@@ -1021,7 +1039,10 @@ fn print_compile_human(a: &CompileArgs, c: &compiler::Compiled) {
         .unwrap_or("circuit");
     println!(
         "{}",
-        sty.dim(&format!("kuantum v{VERSION} · fusion ≤{}", a.fusion))
+        sty.dim(&format!(
+            "kuantum v{VERSION} · fusion ≤{}",
+            a.fusion.unwrap_or(1)
+        ))
     );
     println!(
         "{} · {} · {}",
@@ -1089,7 +1110,7 @@ fn print_compile_json(a: &CompileArgs, c: &compiler::Compiled) {
         "schema_version": 1,
         "file": a.file.display().to_string(),
         "n_qubits": c.n_qubits,
-        "fusion": a.fusion,
+        "fusion": a.fusion.unwrap_or(1),
         "dynamic": c.dynamic,
         "stats": c.stats,
         "ops": ops,
@@ -1218,7 +1239,7 @@ mod tests {
     fn compile_printers_do_not_panic() {
         let args = CompileArgs {
             file: PathBuf::from("demo.qasm"),
-            fusion: 5,
+            fusion: Some(5),
             json: false,
         };
         // Static: trailing measurements split from the fused body.
@@ -1262,7 +1283,7 @@ mod tests {
                 seed: Some(9),
                 precision: PrecisionArg::Auto,
                 backend: BackendArg::Auto,
-                fusion: 5,
+                fusion: Some(5),
                 mem_limit: None,
                 mem_fraction: 0.75,
                 threads: None,

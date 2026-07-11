@@ -8,8 +8,9 @@ Initial release.
   1-qubit fast path, fused k≤6-qubit gather/scatter kernel, single-sweep
   diagonal kernel; rayon parallelism across P+E cores.
 - Fusion compiler: self-inverse cancellation → commuting diagonal fusion →
-  greedy ≤5-qubit gate fusion (qiskit-aer style), barrier fences.
-- Executor: analytic O(2ⁿ + shots) sampling for static circuits; per-shot
+  greedy dense gate fusion, barrier fences. Dense-fusion width defaults
+  per backend (1 on CPU, 5 on Metal — measured, not assumed).
+- Executor: analytic O(2ⁿ + shots·log shots) sampling for static circuits; per-shot
   dynamic path (mid-circuit measure, reset, `if`) with parallel shots when
   the memory budget allows; deterministic seeding everywhere.
 - RAM-aware capacity planning: f64/f32 per run, auto-precision fallback,

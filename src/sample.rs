@@ -55,9 +55,10 @@ pub fn sample_indices<T: Real>(st: &StateVec<T>, shots: usize, rng: &mut impl Rn
     let total = cum_before[nchunks];
 
     // Sorted draws, scaled by the actual total mass so rounding in the
-    // chunk sums can never push a draw past the last chunk.
+    // chunk sums can never push a draw past the last chunk. Draw serially
+    // (RNG determinism), sort in parallel (same multiset either way).
     let mut us: Vec<f64> = (0..shots).map(|_| rng.gen::<f64>() * total).collect();
-    us.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+    us.par_sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
 
     // Route draws to chunks.
     let starts: Vec<usize> = (0..=nchunks)
@@ -86,11 +87,24 @@ pub fn sample_indices<T: Real>(st: &StateVec<T>, shots: usize, rng: &mut impl Rn
                     break 'scan;
                 }
             }
-            // Floating-point edge: any unresolved draws land on the last
-            // index of the chunk.
-            while ptr < s1 {
-                *out_ptr.ptr().add(ptr) = (hi - 1) as u64;
-                ptr += 1;
+            // Floating-point edge: draws can stay unresolved when the
+            // chunk's tiny mass is absorbed by rounding against the
+            // running cumulative. Land them on the last index with
+            // *nonzero* probability so an impossible outcome can never be
+            // emitted (lazy backward scan — this path is ~never taken).
+            if ptr < s1 {
+                let mut last_nz = hi - 1;
+                for i in (lo..hi).rev() {
+                    let (r, im) = (st.re[i].to64(), st.im[i].to64());
+                    if r * r + im * im > 0.0 {
+                        last_nz = i;
+                        break;
+                    }
+                }
+                while ptr < s1 {
+                    *out_ptr.ptr().add(ptr) = last_nz as u64;
+                    ptr += 1;
+                }
             }
         });
     out

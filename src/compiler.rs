@@ -87,16 +87,21 @@ pub struct Compiled {
 
 #[derive(Debug, Clone, Copy)]
 pub struct CompileOptions {
-    /// Maximum fused-gate width in qubits (0 disables fusion, max 6).
+    /// Maximum *dense* fused-gate width in qubits (max 6). 0 disables all
+    /// fusion (including diagonal fusion); any value ≥ 1 keeps diagonal
+    /// fusion on. Executor default: 1 for the CPU backend, 5 for Metal —
+    /// dense fusion trades memory sweeps for a compute-bound matmul, which
+    /// wins on the GPU and loses on the CPU (measured on M4 Pro).
     pub fusion_max: u8,
-    /// Maximum diagonal-fusion width in qubits (table is 2^k entries).
+    /// Maximum diagonal-fusion width in qubits (table is 2^k entries,
+    /// hard cap 12).
     pub diag_max: u8,
 }
 
 impl Default for CompileOptions {
     fn default() -> Self {
         CompileOptions {
-            fusion_max: 5,
+            fusion_max: 1,
             diag_max: 10,
         }
     }
@@ -132,10 +137,11 @@ pub fn compile(p: &Program, opt: &CompileOptions) -> Result<Compiled, crate::Err
         fusion_max: opt.fusion_max.min(crate::state::MAX_FUSED_QUBITS as u8),
         diag_max: opt.diag_max.min(12),
     };
-    if opt.fusion_max >= 2 {
-        ops = fuse_diagonals(ops, opt.diag_max as usize);
-    }
+    // Diagonal fusion is a memory-bound win on every backend, so it runs
+    // whenever fusion is enabled at all; `fusion_max` only bounds the
+    // *dense* fusion width below.
     if opt.fusion_max >= 1 {
+        ops = fuse_diagonals(ops, opt.diag_max as usize);
         ops = fuse_general(ops, opt.fusion_max as usize);
     }
     ops.retain(|op| !matches!(op, COp::Barrier));

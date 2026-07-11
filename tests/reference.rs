@@ -697,7 +697,7 @@ fn disjoint_wide_blocks_force_group_flushes() {
         shots: 0,
         want_statevector: true,
         seed: Some(1),
-        fusion_max: 5,
+        fusion_max: Some(5),
         ..Default::default()
     };
     let r = kuantum::run_program(&c.to_program(), &opts).unwrap();

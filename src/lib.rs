@@ -161,9 +161,13 @@ impl Simulator {
         self
     }
 
-    /// Maximum fused-gate width in qubits (0 disables fusion; default 5).
+    /// Maximum dense fused-gate width in qubits (0 disables all fusion,
+    /// including diagonal fusion). Default is automatic: 1 on CPU, 5 on
+    /// Metal — measured on M4 Pro, dense fusion is a GPU win but a CPU
+    /// loss, while diagonal fusion (always on when this is ≥ 1) wins
+    /// everywhere.
     pub fn fusion(mut self, kmax: u8) -> Self {
-        self.opts.fusion_max = kmax;
+        self.opts.fusion_max = Some(kmax);
         self
     }
 
@@ -206,7 +210,10 @@ impl Simulator {
 
 fn compile_options(opts: &RunOptions) -> compiler::CompileOptions {
     compiler::CompileOptions {
-        fusion_max: opts.fusion_max,
+        fusion_max: opts.fusion_max.unwrap_or(match opts.backend {
+            BackendChoice::Metal => 5,
+            _ => 1,
+        }),
         ..Default::default()
     }
 }

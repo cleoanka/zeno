@@ -26,8 +26,11 @@ pub struct RunOptions {
     /// `None` = auto: f64 if it fits the budget, else f32.
     pub precision: Option<Precision>,
     pub backend: BackendChoice,
-    /// Maximum fused-gate width (0 disables fusion). Default 5.
-    pub fusion_max: u8,
+    /// Maximum *dense* fused-gate width, 0..=6 (0 disables all fusion;
+    /// diagonal fusion runs whenever this is ≥ 1). `None` = auto: 1 on the
+    /// CPU backend (dense fusion loses to the memory-bound 1q sweeps
+    /// there), 5 on Metal (the GPU loves fat fused ops).
+    pub fusion_max: Option<u8>,
     /// Fraction of physical RAM usable for the state (ignored if
     /// `mem_limit` is set).
     pub mem_fraction: f64,
@@ -45,7 +48,7 @@ impl Default for RunOptions {
             seed: None,
             precision: None,
             backend: BackendChoice::Auto,
-            fusion_max: 5,
+            fusion_max: None,
             mem_fraction: 0.75,
             mem_limit: None,
             want_statevector: false,
@@ -416,21 +419,31 @@ fn run_dynamic(
         clbits
     };
 
-    let mut counts = Counts::default();
+    // Aggregate on raw clbit words; format only the unique keys at the end
+    // (String formatting per shot costs ~2x on high-shot dynamic runs).
+    let mut raw: HashMap<u64, u64> = HashMap::new();
     if parallel {
-        let keys: Vec<u64> = (0..shots)
+        raw = (0..shots)
             .into_par_iter()
-            .map_init(
-                || make_backend(c.n_qubits, resolved.precision, opts.backend).unwrap(),
-                |be, shot| {
+            .fold(
+                || (None::<Box<dyn Backend>>, HashMap::<u64, u64>::new()),
+                |(be, mut map), shot| {
+                    let mut be = be.unwrap_or_else(|| {
+                        make_backend(c.n_qubits, resolved.precision, opts.backend).unwrap()
+                    });
                     be.reset_all();
-                    run_shot(be.as_mut(), shot)
+                    let k = run_shot(be.as_mut(), shot);
+                    *map.entry(k).or_insert(0) += 1;
+                    (Some(be), map)
                 },
             )
-            .collect();
-        for k in keys {
-            *counts.0.entry(format_key(k, &c.cregs)).or_insert(0) += 1;
-        }
+            .map(|(_, map)| map)
+            .reduce(HashMap::new, |mut a, b| {
+                for (k, v) in b {
+                    *a.entry(k).or_insert(0) += v;
+                }
+                a
+            });
     } else {
         if !parallel && shots > 1 && !metal {
             notices.push(format!(
@@ -443,8 +456,12 @@ fn run_dynamic(
         for shot in 0..shots {
             be.reset_all();
             let k = run_shot(be.as_mut(), shot);
-            *counts.0.entry(format_key(k, &c.cregs)).or_insert(0) += 1;
+            *raw.entry(k).or_insert(0) += 1;
         }
+    }
+    let mut counts = Counts::default();
+    for (k, n) in raw {
+        *counts.0.entry(format_key(k, &c.cregs)).or_insert(0) += n;
     }
     Ok((counts, None, backend_name))
 }
