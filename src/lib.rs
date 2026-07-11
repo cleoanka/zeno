@@ -25,6 +25,8 @@ pub mod exec;
 pub mod gates;
 pub mod ir;
 pub mod mem;
+#[cfg(feature = "metal")]
+pub mod metal;
 pub mod qasm;
 pub mod sample;
 pub mod state;

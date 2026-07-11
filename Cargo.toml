@@ -23,9 +23,13 @@ thiserror = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+metal = { version = "0.31", optional = true }
+objc = { version = "0.2", optional = true }
 
 [features]
 default = []
+# GPU state-vector backend (f32) via Metal compute; macOS only.
+metal = ["dep:metal", "dep:objc"]
 
 [profile.release]
 lto = "thin"

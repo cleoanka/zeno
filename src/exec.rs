@@ -218,6 +218,22 @@ struct Resolved {
 fn resolve_precision(c: &Compiled, opts: &RunOptions) -> Result<Resolved, Error> {
     let budget = crate::mem::budget_bytes(opts.mem_limit, opts.mem_fraction);
     let mut notices = vec![];
+    if matches!(opts.backend, BackendChoice::Metal) {
+        // Metal has no f64.
+        if opts.precision == Some(Precision::F64) {
+            return Err(Error::Unsupported(
+                "the Metal backend is f32-only (Metal has no f64); \
+                 drop --precision f64 or use --backend cpu"
+                    .into(),
+            ));
+        }
+        crate::mem::plan(c.n_qubits, Precision::F32, budget)?;
+        return Ok(Resolved {
+            precision: Precision::F32,
+            mem_bytes: crate::mem::state_bytes(c.n_qubits, Precision::F32) as u64,
+            notices,
+        });
+    }
     let precision = match opts.precision {
         Some(p) => {
             crate::mem::plan(c.n_qubits, p, budget)?;
@@ -254,9 +270,21 @@ fn make_backend(
             Precision::F32 => Box::new(CpuBackend::<f32>::new(n_qubits)),
             Precision::F64 => Box::new(CpuBackend::<f64>::new(n_qubits)),
         }),
-        BackendChoice::Metal => Err(Error::Unsupported(
-            "this build has no Metal backend (compile with `--features metal`)".into(),
-        )),
+        BackendChoice::Metal => {
+            #[cfg(feature = "metal")]
+            {
+                debug_assert_eq!(precision, Precision::F32);
+                Ok(Box::new(crate::metal::MetalBackend::new(n_qubits)?))
+            }
+            #[cfg(not(feature = "metal"))]
+            {
+                let _ = (n_qubits, precision);
+                Err(Error::Unsupported(
+                    "this build has no Metal backend (rebuild with `--features metal`)"
+                        .into(),
+                ))
+            }
+        }
     }
 }
 
