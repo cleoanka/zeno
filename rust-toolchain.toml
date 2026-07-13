@@ -1,0 +1,7 @@
+# Pin the toolchain channel so local builds match CI (dtolnay/rust-toolchain@stable).
+# The crate's MSRV is 1.80 (see rust-version in Cargo.toml); `stable` always
+# satisfies it. Components below keep `cargo fmt --check` / `cargo clippy` — the
+# two gates CI enforces — available out of the box.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
