@@ -1,5 +1,14 @@
 # Changelog
 
+All notable changes are recorded here. Dates are release dates.
+
+> **Note on the two 2026-07-11 releases.** `v0.1.0` and `v0.2.0` are tagged on
+> the same day on purpose: `v0.1.0` was the first working, tagged core, and
+> `v0.2.0` (NEON kernels, noise channels, OpenQASM 3, `zeno demo`) followed a
+> few hours later as an intentional same-day double release. This is why the
+> test count jumps from 142 (v0.1.0) to 270 (v0.2.0, full Metal build) between
+> two entries with the same date.
+
 ## v0.2.0 — 2026-07-11
 
 - **Explicit NEON kernels** (bit-exact by construction; scalar paths kept
