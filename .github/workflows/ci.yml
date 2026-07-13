@@ -22,6 +22,12 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Tests
         run: cargo test
+      # GitHub's macos-14 runners have no Apple GPU exposed to Metal, so this
+      # job can only *compile* the metal feature — it cannot execute the
+      # GPU kernels. The "270 tests on the full Metal build", the Metal<->CPU
+      # bit-identical counts, and the Metal f32 timings are therefore measured
+      # locally on Apple Silicon; CI gates the 261 CPU tests plus that the
+      # metal feature builds. See the "CI honesty" note in the README.
       - name: Metal feature compiles
         run: cargo check --features metal
       - name: Release smoke (bell)

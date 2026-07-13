@@ -57,6 +57,14 @@ cross-validated against an independent reference and against qiskit itself.
   unsafe kernels have written disjointness proofs and were stress-tested at
   1/3/16 threads. 270 tests on the full Metal build (261 CPU-only), clippy-clean, CI on Apple Silicon.
 
+> **CI honesty.** GitHub's Apple-Silicon runners expose no GPU to Metal, so CI
+> gates the **261 CPU tests**, `cargo fmt --check`, `cargo clippy -D warnings`,
+> and that the metal feature *compiles* (`cargo check --features metal`). The
+> remaining **9 Metal tests** (bringing the total to 270), the Metal ↔ CPU
+> bit-identical counts, and the Metal f32 timings below are measured **locally
+> on an Apple GPU** — CI cannot execute GPU kernels, so it does not certify
+> them. See the note in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
 ## Benchmarks
 
 <p align="center">
