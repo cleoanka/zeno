@@ -10,6 +10,15 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # rand 0.9+ and rand_xoshiro 0.7+ are breaking rewrites of the RNG API
+      # (`gen`/`gen_range` -> `random`/`random_range`, `SeedableRng` reshuffle):
+      # bumping them is a deliberate code migration, not an automated dep bump.
+      # Minor/patch updates within the current majors still flow through.
+      - dependency-name: "rand"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "rand_xoshiro"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"
