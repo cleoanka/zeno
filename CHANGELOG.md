@@ -9,6 +9,32 @@ All notable changes are recorded here. Dates are release dates.
 > test count jumps from 142 (v0.1.0) to 270 (v0.2.0, full Metal build) between
 > two entries with the same date.
 
+## Unreleased
+
+Inputs that used to be accepted now fail with a clean error (exit 1):
+
+- **Non-finite gate parameters** (`rx(ln(0))`, `rx(1/0)`) are rejected by the
+  compiler (`gate 'rx' parameter #0 is not finite`). Before, static circuits
+  panicked in the sampler (exit 101) and dynamic ones silently measured 0.
+- **More than 64 classical bits in total** are rejected at the declaration in
+  both front ends. Before, `creg a[4294967295]; creg b[2];` wrapped to 1 in
+  `u32` and slipped past the compiler's limit; `Program::n_qubits` /
+  `n_clbits` now saturate instead of wrapping.
+- **Gate expansion producing more than 10,000,000 instructions** in one file
+  is rejected at the call site (line:col), before expanding. Before, a few
+  hundred bytes of nested `gate` definitions could exhaust memory.
+- **Invalid self-inverse pairs** (`h(99).h(99)`, `cx(0,0).cx(0,0)` from the
+  Rust builder) now error like a single invalid gate does, instead of being
+  cancelled away silently. The QASM front ends were not affected.
+
+Fixes:
+
+- `circuit::qft(n)` for `n >= 33`: controlled-phase angles are computed with
+  `2f64.powi`, so `cp(0, 32)` gets π/2³² instead of a wrapped shift (π).
+  Angles for `n <= 32` are bit-identical.
+- Rustdoc and CLI help: fusion default (auto: 1 on CPU, 5 on Metal) and
+  OpenQASM 3 (subset) support are now described correctly.
+
 ## v0.2.0 — 2026-07-11
 
 - **Explicit NEON kernels** (bit-exact by construction; scalar paths kept
