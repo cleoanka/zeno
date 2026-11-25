@@ -4,11 +4,12 @@
 //!
 //! - Split-complex (SoA) state vector; NEON-friendly, memory-bandwidth-lean
 //!   kernels parallelized with rayon across P+E cores.
-//! - A fusion compiler (cancellation → diagonal fusion → ≤5-qubit gate
-//!   fusion) so deep circuits become a handful of memory sweeps.
+//! - A fusion compiler (cancellation → diagonal fusion → dense gate fusion,
+//!   up to 6 qubits; auto 1 on CPU, 5 on Metal) so deep circuits become a
+//!   handful of memory sweeps.
 //! - RAM-aware capacity planning: pick f64/f32 per run, refuse politely
 //!   when a state can't fit, and tell you what *would* fit.
-//! - OpenQASM 2.0 front end and a plain Rust builder API.
+//! - OpenQASM 2.0 and 3 (subset) front ends and a plain Rust builder API.
 //!
 //! ```
 //! use zeno::{Circuit, Simulator};

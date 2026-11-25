@@ -10,7 +10,8 @@
 //!    table applied in one sweep (a QFT's controlled-phase ladder becomes
 //!    one diagonal per layer).
 //! 4. **fuse general** — greedily absorb adjacent gates while the combined
-//!    support stays ≤ `fusion_max` qubits (default 5, like qiskit-aer).
+//!    support stays ≤ `fusion_max` qubits (`CompileOptions` default 1; the
+//!    executor's auto value is 1 on CPU, 5 on Metal, like qiskit-aer).
 //!    One fused 5-qubit gate = one memory sweep instead of many.
 //! 5. **finalize** — split trailing measurements (sampled analytically)
 //!    from dynamic circuits (measure/reset/conditionals mid-circuit → the

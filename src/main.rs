@@ -4,7 +4,7 @@
 //!
 //! - `demo`    — built-in circuits (no files needed): friendly intro, the
 //!   QASM source, and a run. The zero-setup first-run experience.
-//! - `run`     — parse, compile and run an OpenQASM 2.0 file; histogram or JSON.
+//! - `run`     — parse, compile and run an OpenQASM 2.0/3 file; histogram or JSON.
 //! - `info`    — machine capacity: RAM, budget, max qubits per precision.
 //! - `bench`   — seeded random-circuit throughput sweep (amp-updates/s).
 //! - `compile` — fusion visualizer: stats + the compiled op list.
@@ -48,7 +48,7 @@ struct Cli {
 enum Cmd {
     /// Run a built-in example circuit — no files needed (start here)
     Demo(DemoArgs),
-    /// Run an OpenQASM 2.0 circuit and print measurement counts
+    /// Run an OpenQASM 2.0 or 3 (subset) circuit and print measurement counts
     Run(RunArgs),
     /// Show machine capacity (RAM, budget, max qubits by precision)
     Info {
@@ -64,7 +64,7 @@ enum Cmd {
 
 #[derive(clap::Args)]
 struct RunArgs {
-    /// OpenQASM 2.0 file
+    /// OpenQASM 2.0 or 3 (subset) file
     file: PathBuf,
     /// Number of measurement shots
     #[arg(long, default_value_t = 1024)]
@@ -155,7 +155,7 @@ struct BenchArgs {
 
 #[derive(clap::Args)]
 struct CompileArgs {
-    /// OpenQASM 2.0 file
+    /// OpenQASM 2.0 or 3 (subset) file
     file: PathBuf,
     /// Maximum dense fused-gate width 0-6 [default: 1, the cpu auto value]
     #[arg(long, value_name = "K")]

@@ -25,7 +25,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
 /// Options for a run. `Default` gives 1024 shots, auto precision, CPU
-/// backend, fusion 5, 75% of physical RAM as budget.
+/// backend, auto fusion (1 on CPU, 5 on Metal), 75% of physical RAM as
+/// budget.
 #[derive(Debug, Clone)]
 pub struct RunOptions {
     pub shots: u64,
