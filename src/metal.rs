@@ -369,11 +369,14 @@ pub struct MetalBackend {
 
 impl MetalBackend {
     pub fn new(n_qubits: u32) -> Result<Self, Error> {
-        if n_qubits > 32 {
+        // The diagonal kernel launches one thread per amplitude and indexes
+        // it with a 32-bit `uint gid`, so the grid (2^n threads) must stay
+        // below 2^32: 32 qubits would overflow the thread index.
+        if n_qubits > 31 {
             return Err(Error::Unsupported(format!(
-                "the Metal backend caps at 32 qubits (one GPU thread per \
-                 amplitude in a 1-D grid); {n_qubits} requested — use \
-                 --backend cpu"
+                "the Metal backend caps at 31 qubits (one GPU thread per \
+                 amplitude in a 1-D grid, 32-bit thread index); {n_qubits} \
+                 requested — use --backend cpu"
             )));
         }
         let pipes = pipelines()?;
@@ -677,6 +680,17 @@ mod tests {
             .zip(b)
             .map(|(x, y)| (x - y).norm())
             .fold(0.0, f64::max)
+    }
+
+    /// 32 qubits would need a 2^32-thread diagonal grid, past the kernels'
+    /// 32-bit `uint gid`: refused up front (before any device/buffer work).
+    #[test]
+    fn refuses_32_qubits() {
+        match MetalBackend::new(32) {
+            Err(Error::Unsupported(msg)) => assert!(msg.contains("31 qubits"), "{msg}"),
+            Err(e) => panic!("expected Unsupported, got {e}"),
+            Ok(_) => panic!("32 qubits must be refused"),
+        }
     }
 
     /// (a) Every native gate on a random 5-qubit state: Metal vs CPU f32.
