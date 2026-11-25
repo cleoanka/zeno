@@ -28,8 +28,7 @@
 
 use crate::exec::Backend;
 use crate::ir::C64;
-use crate::sample::sample_indices;
-use crate::state::StateVec;
+use crate::sample::sample_slices;
 use crate::Error;
 use metal::{
     Buffer, CommandBuffer, CommandQueue, ComputePipelineState, Device, MTLResourceOptions, MTLSize,
@@ -369,11 +368,14 @@ pub struct MetalBackend {
 
 impl MetalBackend {
     pub fn new(n_qubits: u32) -> Result<Self, Error> {
-        if n_qubits > 32 {
+        // The diagonal kernel launches one thread per amplitude and indexes
+        // it with a 32-bit `uint gid`, so the grid (2^n threads) must stay
+        // below 2^32: 32 qubits would overflow the thread index.
+        if n_qubits > 31 {
             return Err(Error::Unsupported(format!(
-                "the Metal backend caps at 32 qubits (one GPU thread per \
-                 amplitude in a 1-D grid); {n_qubits} requested — use \
-                 --backend cpu"
+                "the Metal backend caps at 31 qubits (one GPU thread per \
+                 amplitude in a 1-D grid, 32-bit thread index); {n_qubits} \
+                 requested — use --backend cpu"
             )));
         }
         let pipes = pipelines()?;
@@ -587,13 +589,11 @@ impl Backend for MetalBackend {
     fn sample(&mut self, shots: usize, seed: u64) -> Vec<u64> {
         self.flush();
         let (re, im) = self.slices();
-        // One copy into a StateVec so the exact chunked sampler of the CPU
-        // backend runs here too: identical amplitudes → identical draws.
-        let mut st = StateVec::<f32>::zero_state(self.n_qubits);
-        st.re.copy_from_slice(re);
-        st.im.copy_from_slice(im);
+        // The CPU backend's exact chunked sampler, run directly on the
+        // shared buffers (no 2^n copy): identical amplitudes → identical
+        // draws.
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
-        sample_indices(&st, shots, &mut rng)
+        sample_slices(re, im, shots, &mut rng)
     }
 
     fn statevector(&mut self) -> Vec<C64> {
@@ -677,6 +677,17 @@ mod tests {
             .zip(b)
             .map(|(x, y)| (x - y).norm())
             .fold(0.0, f64::max)
+    }
+
+    /// 32 qubits would need a 2^32-thread diagonal grid, past the kernels'
+    /// 32-bit `uint gid`: refused up front (before any device/buffer work).
+    #[test]
+    fn refuses_32_qubits() {
+        match MetalBackend::new(32) {
+            Err(Error::Unsupported(msg)) => assert!(msg.contains("31 qubits"), "{msg}"),
+            Err(e) => panic!("expected Unsupported, got {e}"),
+            Ok(_) => panic!("32 qubits must be refused"),
+        }
     }
 
     /// (a) Every native gate on a random 5-qubit state: Metal vs CPU f32.

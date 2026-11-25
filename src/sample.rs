@@ -27,7 +27,15 @@ impl<T> SendPtr<T> {
 /// state (the parallel phase writes to disjoint, pre-computed slots).
 /// Returned indices are in ascending order (fine for counting).
 pub fn sample_indices<T: Real>(st: &StateVec<T>, shots: usize, rng: &mut impl Rng) -> Vec<u64> {
-    let n = st.len();
+    sample_slices(&st.re, &st.im, shots, rng)
+}
+
+/// [`sample_indices`] over split re/im amplitude slices, so a backend that
+/// owns its amplitudes elsewhere (e.g. Metal shared buffers) samples them in
+/// place. Same amplitudes and RNG state ⇒ same draws.
+pub fn sample_slices<T: Real>(re: &[T], im: &[T], shots: usize, rng: &mut impl Rng) -> Vec<u64> {
+    assert_eq!(re.len(), im.len(), "re/im length mismatch");
+    let n = re.len();
     if shots == 0 {
         return vec![];
     }
@@ -42,7 +50,7 @@ pub fn sample_indices<T: Real>(st: &StateVec<T>, shots: usize, rng: &mut impl Rn
             let hi = (lo + chunk).min(n);
             let mut acc = 0.0f64;
             for i in lo..hi {
-                let (r, im) = (st.re[i].to64(), st.im[i].to64());
+                let (r, im) = (re[i].to64(), im[i].to64());
                 acc += r * r + im * im;
             }
             acc
@@ -58,7 +66,9 @@ pub fn sample_indices<T: Real>(st: &StateVec<T>, shots: usize, rng: &mut impl Rn
     // chunk sums can never push a draw past the last chunk. Draw serially
     // (RNG determinism), sort in parallel (same multiset either way).
     let mut us: Vec<f64> = (0..shots).map(|_| rng.gen::<f64>() * total).collect();
-    us.par_sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+    // `total_cmp`: same order as `partial_cmp` on these finite, non-negative
+    // draws, but a NaN amplitude (→ NaN total) can no longer panic the sort.
+    us.par_sort_unstable_by(|a, b| a.total_cmp(b));
 
     // Route draws to chunks.
     let starts: Vec<usize> = (0..=nchunks)
@@ -77,7 +87,7 @@ pub fn sample_indices<T: Real>(st: &StateVec<T>, shots: usize, rng: &mut impl Rn
             let mut acc = cum_before[c];
             let mut ptr = s0;
             'scan: for i in lo..hi {
-                let (r, im) = (st.re[i].to64(), st.im[i].to64());
+                let (r, im) = (re[i].to64(), im[i].to64());
                 acc += r * r + im * im;
                 while ptr < s1 && us[ptr] < acc {
                     *out_ptr.ptr().add(ptr) = i as u64;
@@ -95,7 +105,7 @@ pub fn sample_indices<T: Real>(st: &StateVec<T>, shots: usize, rng: &mut impl Rn
             if ptr < s1 {
                 let mut last_nz = hi - 1;
                 for i in (lo..hi).rev() {
-                    let (r, im) = (st.re[i].to64(), st.im[i].to64());
+                    let (r, im) = (re[i].to64(), im[i].to64());
                     if r * r + im * im > 0.0 {
                         last_nz = i;
                         break;
@@ -141,6 +151,32 @@ mod tests {
         assert_eq!(ones + zeros, 100_000, "only |00> and |11> may appear");
         let frac = ones as f64 / 100_000.0;
         assert!((frac - 0.5).abs() < 0.01, "frac={frac}");
+    }
+
+    /// The Metal backend samples its shared buffers through `sample_slices`;
+    /// CPU/Metal count parity relies on it drawing exactly what
+    /// `sample_indices` draws for the same amplitudes and seed.
+    #[test]
+    fn slices_match_statevec_sampler() {
+        let mut st = StateVec::<f32>::zero_state(5);
+        for q in 0..5 {
+            apply_1q(&mut st, q, &h());
+        }
+        let mut r1 = Xoshiro256PlusPlus::seed_from_u64(9);
+        let mut r2 = Xoshiro256PlusPlus::seed_from_u64(9);
+        assert_eq!(
+            sample_indices(&st, 4096, &mut r1),
+            sample_slices(&st.re, &st.im, 4096, &mut r2)
+        );
+    }
+
+    /// A NaN amplitude makes every draw NaN; the sort must not panic.
+    #[test]
+    fn nan_amplitude_does_not_panic() {
+        let mut st = StateVec::<f64>::zero_state(2);
+        st.re[1] = f64::NAN;
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(3);
+        assert_eq!(sample_indices(&st, 64, &mut rng).len(), 64);
     }
 
     #[test]
