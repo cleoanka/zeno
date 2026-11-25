@@ -133,7 +133,7 @@ pub fn compile(p: &Program, opt: &CompileOptions) -> Result<Compiled, crate::Err
     }
 
     let input_gates = count_gates(&p.instrs);
-    let cancelled_instrs = cancel(&p.instrs);
+    let cancelled_instrs = cancel(&p.instrs, n_qubits)?;
     let cancelled = input_gates - count_gates(&cancelled_instrs);
 
     let mut ops = Vec::with_capacity(cancelled_instrs.len());
@@ -212,7 +212,9 @@ fn count_gates(instrs: &[Instr]) -> usize {
 
 /// Drop adjacent self-inverse pairs acting on identical qubits, looking
 /// through gates on disjoint qubits. Barriers and non-gate ops fence.
-fn cancel(instrs: &[Instr]) -> Vec<Instr> {
+/// A pair is validated before it is dropped, so an invalid gate (qubit out
+/// of range, duplicate qubits) errors whether it appears once or twice.
+fn cancel(instrs: &[Instr], n_qubits: u32) -> Result<Vec<Instr>, crate::Error> {
     let mut out: Vec<Instr> = Vec::with_capacity(instrs.len());
     'next: for ins in instrs {
         if let Instr::Gate(g) = ins {
@@ -222,6 +224,7 @@ fn cancel(instrs: &[Instr]) -> Vec<Instr> {
                         Instr::Gate(pg) => {
                             if pg.qubits.iter().any(|q| g.qubits.contains(q)) {
                                 if pg.name == g.name && pg.qubits == g.qubits {
+                                    lower_gate(g, n_qubits)?;
                                     out.remove(i);
                                     continue 'next;
                                 }
@@ -235,7 +238,7 @@ fn cancel(instrs: &[Instr]) -> Vec<Instr> {
         }
         out.push(ins.clone());
     }
-    out
+    Ok(out)
 }
 
 /// Resolve one instruction into `COp`s (sorted-qubit convention).
@@ -714,6 +717,19 @@ mod tests {
         let out = compile_c(&c, 5);
         // barrier prevents both cancellation and fusion
         assert_eq!(out.ops.len(), 2);
+    }
+
+    #[test]
+    fn cancellation_does_not_hide_invalid_gates() {
+        // A single h(99) errors; the pair used to cancel away silently.
+        let mut c = Circuit::new(2);
+        c.h(99).h(99);
+        let e = compile(&c.to_program(), &CompileOptions::default()).unwrap_err();
+        assert!(e.to_string().contains("qubit 99 out of range"), "{e}");
+        let mut c = Circuit::new(2);
+        c.cx(0, 0).cx(0, 0);
+        let e = compile(&c.to_program(), &CompileOptions::default()).unwrap_err();
+        assert!(e.to_string().contains("duplicate qubits"), "{e}");
     }
 
     #[test]
