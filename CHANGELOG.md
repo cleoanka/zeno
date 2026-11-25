@@ -26,6 +26,9 @@ Inputs that used to be accepted now fail with a clean error (exit 1):
 - **Invalid self-inverse pairs** (`h(99).h(99)`, `cx(0,0).cx(0,0)` from the
   Rust builder) now error like a single invalid gate does, instead of being
   cancelled away silently. The QASM front ends were not affected.
+- **32 qubits on the Metal backend** are refused (the cap was 32, now 31):
+  the diagonal kernel's 1-D grid would need 2^32 threads, past a 32-bit grid
+  dimension. 32 qubits still run on `--backend cpu`.
 
 Fixes:
 

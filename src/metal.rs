@@ -368,9 +368,10 @@ pub struct MetalBackend {
 
 impl MetalBackend {
     pub fn new(n_qubits: u32) -> Result<Self, Error> {
-        // The diagonal kernel launches one thread per amplitude and indexes
-        // it with a 32-bit `uint gid`, so the grid (2^n threads) must stay
-        // below 2^32: 32 qubits would overflow the thread index.
+        // The diagonal kernel launches one thread per amplitude in a 1-D
+        // grid addressed through 32-bit `uint` positions, so the grid size
+        // (2^n threads) must stay below 2^32: 32 qubits would need a
+        // 2^32-thread grid, one past what a 32-bit grid dimension can hold.
         if n_qubits > 31 {
             return Err(Error::Unsupported(format!(
                 "the Metal backend caps at 31 qubits (one GPU thread per \
