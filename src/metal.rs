@@ -28,8 +28,7 @@
 
 use crate::exec::Backend;
 use crate::ir::C64;
-use crate::sample::sample_indices;
-use crate::state::StateVec;
+use crate::sample::sample_slices;
 use crate::Error;
 use metal::{
     Buffer, CommandBuffer, CommandQueue, ComputePipelineState, Device, MTLResourceOptions, MTLSize,
@@ -590,13 +589,11 @@ impl Backend for MetalBackend {
     fn sample(&mut self, shots: usize, seed: u64) -> Vec<u64> {
         self.flush();
         let (re, im) = self.slices();
-        // One copy into a StateVec so the exact chunked sampler of the CPU
-        // backend runs here too: identical amplitudes → identical draws.
-        let mut st = StateVec::<f32>::zero_state(self.n_qubits);
-        st.re.copy_from_slice(re);
-        st.im.copy_from_slice(im);
+        // The CPU backend's exact chunked sampler, run directly on the
+        // shared buffers (no 2^n copy): identical amplitudes → identical
+        // draws.
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
-        sample_indices(&st, shots, &mut rng)
+        sample_slices(re, im, shots, &mut rng)
     }
 
     fn statevector(&mut self) -> Vec<C64> {
