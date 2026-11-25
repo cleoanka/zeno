@@ -63,12 +63,18 @@ pub struct Program {
 }
 
 impl Program {
+    // Saturating: a hand-built `Program` with huge registers must still trip
+    // the compiler's size limits instead of wrapping past them.
     pub fn n_qubits(&self) -> u32 {
-        self.qregs.iter().map(|r| r.size).sum()
+        self.qregs
+            .iter()
+            .fold(0u32, |n, r| n.saturating_add(r.size))
     }
 
     pub fn n_clbits(&self) -> u32 {
-        self.cregs.iter().map(|r| r.size).sum()
+        self.cregs
+            .iter()
+            .fold(0u32, |n, r| n.saturating_add(r.size))
     }
 
     /// Offset of qreg `idx` in the global qubit index space.

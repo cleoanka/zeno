@@ -717,6 +717,29 @@ mod tests {
     }
 
     #[test]
+    fn clbit_total_does_not_wrap_past_the_limit() {
+        let p = Program {
+            qregs: vec![Reg {
+                name: "q".into(),
+                size: 1,
+            }],
+            cregs: vec![
+                Reg {
+                    name: "a".into(),
+                    size: u32::MAX,
+                },
+                Reg {
+                    name: "b".into(),
+                    size: 2,
+                },
+            ],
+            instrs: vec![],
+        };
+        let e = compile(&p, &CompileOptions::default()).unwrap_err();
+        assert!(e.to_string().contains("more than 64 classical bits"), "{e}");
+    }
+
+    #[test]
     fn non_finite_parameter_is_rejected() {
         for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let mut c = Circuit::new(1);

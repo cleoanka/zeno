@@ -41,6 +41,11 @@ const MAX_EXPANSION_DEPTH: usize = 128;
 /// Maximum total number of qubits across all `qreg` declarations.
 const MAX_TOTAL_QUBITS: u32 = 48;
 
+/// Maximum total number of classical bits across all register declarations
+/// (the compiler's limit; checked here so oversized sizes cannot wrap the
+/// u32 clbit index space).
+const MAX_TOTAL_CLBITS: u32 = 64;
+
 /// Words that cannot be used as register, gate or parameter names.
 const RESERVED: &[&str] = &[
     "OPENQASM", "include", "qreg", "creg", "gate", "opaque", "measure", "reset", "barrier", "if",
@@ -835,6 +840,17 @@ impl Parser {
             self.qregs.insert(name.clone(), self.prog.qregs.len());
             self.prog.qregs.push(Reg { name, size });
         } else {
+            let total = self.prog.n_clbits() as u64 + size as u64;
+            if total > MAX_TOTAL_CLBITS as u64 {
+                return Err(err(
+                    sline,
+                    scol,
+                    format!(
+                        "declaring 'creg {name}[{size}]' would bring the total to {total} \
+                         classical bits; the maximum is {MAX_TOTAL_CLBITS}"
+                    ),
+                ));
+            }
             self.cregs.insert(name.clone(), self.prog.cregs.len());
             self.prog.cregs.push(Reg { name, size });
         }
@@ -2094,6 +2110,24 @@ mod tests {
             3,
             8,
             "maximum is 48",
+        );
+    }
+
+    #[test]
+    fn err_too_many_clbits_even_when_the_u32_sum_wraps() {
+        // 4294967295 + 2 wraps to 1 in u32 and used to slip past the
+        // compiler's 64-bit check.
+        assert_err(
+            "OPENQASM 2.0;\nqreg q[1];\ncreg a[4294967295];\ncreg b[2];\n",
+            3,
+            8,
+            "the maximum is 64",
+        );
+        assert_err(
+            "OPENQASM 2.0;\nqreg q[1];\ncreg a[60];\ncreg b[5];\n",
+            4,
+            8,
+            "total to 65 classical bits",
         );
     }
 
