@@ -235,6 +235,26 @@ fn qft5_matches_reference_replay_and_dft_formula() {
     }
 }
 
+#[test]
+fn qft_angles_stay_exact_past_32_qubits() {
+    // `1u32 << 32` used to wrap: qft(33)'s cp(0, 32) came out as π, not
+    // π/2^32. Only the instruction stream is inspected (33 qubits is far
+    // beyond the test machine's state-vector budget).
+    let p = qft(33).to_program();
+    let angle_of = |ctrl: u32, tgt: u32| -> f64 {
+        p.instrs
+            .iter()
+            .find_map(|ins| match ins {
+                Instr::Gate(g) if g.name == "cp" && g.qubits == [ctrl, tgt] => Some(g.params[0]),
+                _ => None,
+            })
+            .expect("cp present")
+    };
+    assert_eq!(angle_of(0, 32), PI / 4294967296.0);
+    assert_eq!(angle_of(1, 32), PI / 2147483648.0);
+    assert_eq!(angle_of(31, 32), PI / 2.0);
+}
+
 // -------------------------------------------------- sampling statistics
 
 #[test]

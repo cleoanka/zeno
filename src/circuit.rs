@@ -140,7 +140,7 @@ pub fn qft(n: u32) -> Circuit {
     for i in (0..n).rev() {
         c.h(i);
         for j in (0..i).rev() {
-            let angle = std::f64::consts::PI / f64::from(1u32 << (i - j));
+            let angle = std::f64::consts::PI / 2f64.powi((i - j) as i32);
             c.cp(j, i, angle);
         }
     }
