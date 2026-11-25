@@ -179,5 +179,5 @@ c[1] = measure q[1];
    plus the literal constants `π`/`τ`; general unicode identifiers are not
    accepted.
 6. Same limits as the 2.0 front end: ≤ 48 total qubits, ≤ 128 gate-expansion
-   depth, ≤ 64 clbits.
+   depth, ≤ 10,000,000 gate-expanded instructions, ≤ 64 clbits.
 7. `barrier` de-duplicates repeated qubits instead of erroring.

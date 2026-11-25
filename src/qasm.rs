@@ -11,8 +11,9 @@
 //!   is read. The crate's native gate set ([`crate::gates::lookup`]) is always
 //!   available, even without the include (a friendly superset of the spec).
 //! - `qreg`/`creg` declarations, `gate` definitions (expanded inline at call
-//!   sites, nesting depth ≤ 128), gate calls with spec broadcasting,
-//!   `measure`, `reset`, `barrier`, `if (creg == n) qop;`.
+//!   sites, nesting depth ≤ 128, ≤ 10M expanded instructions), gate calls
+//!   with spec broadcasting, `measure`, `reset`, `barrier`,
+//!   `if (creg == n) qop;`.
 //! - Parameter expressions: literals, `pi`, bound gate parameters,
 //!   `+ - * / ^` (`^` binds tightest, right-assoc), unary `-`, parentheses,
 //!   `sin cos tan exp ln sqrt` — evaluated to `f64` at parse time.
@@ -37,6 +38,12 @@ mod qasm3;
 
 /// Maximum nesting depth when expanding user-defined gates.
 const MAX_EXPANSION_DEPTH: usize = 128;
+
+/// Maximum total number of instructions that user-defined gate expansion may
+/// produce in one program. The depth limit alone does not bound the output:
+/// each level can double it, so a few hundred bytes of nested definitions
+/// would otherwise expand to billions of instructions.
+const MAX_EXPANDED_INSTRS: u64 = 10_000_000;
 
 /// Maximum total number of qubits across all `qreg` declarations.
 const MAX_TOTAL_QUBITS: u32 = 48;
@@ -547,6 +554,8 @@ struct GateMacro {
     n_params: usize,
     n_qargs: usize,
     body: Vec<MacroStmt>,
+    /// Number of instructions one call expands to (saturating).
+    expanded_len: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -571,6 +580,9 @@ struct Parser {
     /// Register name → index into `prog.cregs`.
     cregs: HashMap<String, usize>,
     macros: HashMap<String, GateMacro>,
+    /// Instructions produced by gate expansion so far (see
+    /// [`MAX_EXPANDED_INSTRS`]).
+    expanded: u64,
 }
 
 impl Parser {
@@ -582,6 +594,7 @@ impl Parser {
             qregs: HashMap::new(),
             cregs: HashMap::new(),
             macros: HashMap::new(),
+            expanded: 0,
         }
     }
 
@@ -953,6 +966,21 @@ impl Parser {
                 .collect();
             self.check_distinct(&qubits, &name, line, col)?;
             if is_macro {
+                let total = self
+                    .expanded
+                    .saturating_add(self.macros[&resolved].expanded_len);
+                if total > MAX_EXPANDED_INSTRS {
+                    return Err(err(
+                        line,
+                        col,
+                        format!(
+                            "expanding gate '{name}' would bring the total number of \
+                             instructions produced by gate expansion to {total}; the \
+                             maximum is {MAX_EXPANDED_INSTRS}"
+                        ),
+                    ));
+                }
+                self.expanded = total;
                 self.expand_macro(&resolved, &params, &qubits, 0, line, col, &mut out)?;
             } else {
                 out.push(Instr::Gate(GateInstr {
@@ -1352,12 +1380,22 @@ impl Parser {
         }
         self.expect(&Tok::RBrace, "after the gate body")?;
 
+        let expanded_len = body
+            .iter()
+            .map(|stmt| match stmt {
+                MacroStmt::Call { name: callee, .. } => {
+                    self.macros.get(callee).map_or(1, |m| m.expanded_len)
+                }
+                MacroStmt::Barrier { .. } => 1,
+            })
+            .fold(0u64, u64::saturating_add);
         self.macros.insert(
             name,
             GateMacro {
                 n_params: params.len(),
                 n_qargs: qargs.len(),
                 body,
+                expanded_len,
             },
         );
         Ok(())
@@ -2229,6 +2267,24 @@ mod tests {
             12,
             "recursive gate definitions are not allowed",
         );
+    }
+
+    #[test]
+    fn err_expansion_size_limit() {
+        // Each level doubles: 30 levels would be 2^30 instructions from a
+        // ~1 KB file. Rejected up front, before anything is expanded.
+        let mut src = String::from("OPENQASM 2.0;\nqreg q[1];\ngate g0 a { x a; }\n");
+        for i in 1..=30 {
+            src.push_str(&format!("gate g{i} a {{ g{} a; g{} a; }}\n", i - 1, i - 1));
+        }
+        src.push_str("g30 q[0];\n");
+        let e = parse_str(&src).expect_err("expected expansion size error");
+        assert!(
+            e.msg.contains("to 1073741824; the maximum is 10000000"),
+            "msg: {}",
+            e.msg
+        );
+        assert_eq!((e.line, e.col), (34, 1));
     }
 
     #[test]

@@ -136,7 +136,8 @@ Deliberate, all on the permissive side except where noted:
 5. `OPENQASM 2;` is accepted as version 2.0; `OPENQASM 3;`/`3.0;` routes to the OpenQASM 3 subset parser (QASM3.md).
 6. **Limits:** ≤ 48 total qubits (front-end check, matching the compiler),
    ≤ 64 total classical bits (front-end check, matching the compiler),
-   ≤ 128 gate-expansion nesting depth.
+   ≤ 128 gate-expansion nesting depth, ≤ 10,000,000 instructions produced
+   by gate expansion in total.
 7. `barrier` de-duplicates repeated qubits instead of erroring.
 8. An `if` value larger than the register can represent is accepted (the
    condition is simply never true).
