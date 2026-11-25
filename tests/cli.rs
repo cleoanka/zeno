@@ -696,3 +696,53 @@ fn run_noise_human_output_surfaces_the_notice() {
         "notice expected in human output:\n{text}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Malformed-input regressions (review findings)
+// ---------------------------------------------------------------------------
+
+/// Write `src` into the cargo tempdir under a per-test unique name.
+fn write_qasm(tag: &str, src: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(&dir).expect("tempdir");
+    let path = dir.join(format!("{tag}_{}.qasm", std::process::id()));
+    std::fs::write(&path, src).expect("write qasm");
+    path
+}
+
+#[test]
+fn run_non_finite_gate_parameter_is_a_clean_error() {
+    // Static circuit used to panic in the sampler (exit 101); the dynamic
+    // one silently printed "00" 100%; OpenQASM 3 `1/0` panicked too.
+    let cases = [
+        (
+            "nan_static",
+            "OPENQASM 2.0;\nqreg q[1];\ncreg c[1];\nrx(ln(0)) q[0];\nmeasure q[0] -> c[0];\n",
+        ),
+        (
+            "nan_dynamic",
+            "OPENQASM 2.0;\nqreg q[2];\ncreg c[2];\nrx(ln(0)) q[0];\nmeasure q[0] -> c[0];\n\
+             h q[1];\nmeasure q[1] -> c[1];\n",
+        ),
+        (
+            "inf_qasm3",
+            "OPENQASM 3;\nqubit[1] q;\nbit[1] c;\nrx(1/0) q[0];\nc[0] = measure q[0];\n",
+        ),
+    ];
+    for (tag, src) in cases {
+        let path = write_qasm(tag, src);
+        let out = run(&["run", path.to_str().unwrap(), "--seed", "1"]);
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "{tag}: stderr: {}",
+            stderr(&out)
+        );
+        let err = stderr(&out);
+        assert!(
+            err.starts_with("error:") && err.contains("gate 'rx' parameter #0 is not finite"),
+            "{tag}: stderr: {err}"
+        );
+        assert!(stdout(&out).is_empty(), "{tag}: no histogram on error");
+    }
+}

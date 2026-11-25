@@ -314,6 +314,14 @@ fn lower_gate(g: &GateInstr, n_qubits: u32) -> Result<Option<COp>, crate::Error>
             g.name, g.qubits
         )));
     }
+    // NaN/±inf (e.g. `rx(ln(0))`, `rx(1/0)`) would poison every amplitude:
+    // the sampler panics or dynamic measurements silently read 0.
+    if let Some((i, p)) = g.params.iter().enumerate().find(|(_, p)| !p.is_finite()) {
+        return Err(crate::Error::InvalidCircuit(format!(
+            "gate '{}' parameter #{i} is not finite ({p})",
+            g.name
+        )));
+    }
     if g.name == "id" || g.name == "u0" {
         return Ok(None);
     }
@@ -706,6 +714,20 @@ mod tests {
         let out = compile_c(&c, 5);
         // barrier prevents both cancellation and fusion
         assert_eq!(out.ops.len(), 2);
+    }
+
+    #[test]
+    fn non_finite_parameter_is_rejected() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut c = Circuit::new(1);
+            c.rx(0, bad);
+            let e = compile(&c.to_program(), &CompileOptions::default()).unwrap_err();
+            assert!(
+                e.to_string()
+                    .contains("gate 'rx' parameter #0 is not finite"),
+                "{e}"
+            );
+        }
     }
 
     #[test]
