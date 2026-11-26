@@ -11,7 +11,7 @@ env:
 jobs:
   test:
     # Apple Silicon runner: same ISA the kernels are tuned for.
-    runs-on: macos-14
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -22,7 +22,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Tests
         run: cargo test
-      # GitHub's macos-14 runners have no Apple GPU exposed to Metal, so this
+      # GitHub's hosted macOS runners have no Apple GPU exposed to Metal, so this
       # job can only *compile* the metal feature — it cannot execute the
       # GPU kernels. The "270 tests on the full Metal build", the Metal<->CPU
       # bit-identical counts, and the Metal f32 timings are therefore measured
